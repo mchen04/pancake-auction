@@ -1,0 +1,7 @@
+.env*
+.next/
+node_modules/
+coverage/
+evidence/
+screenshots/
+*.tsbuildinfo

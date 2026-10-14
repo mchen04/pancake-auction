@@ -1,0 +1,38 @@
+{
+  "name": "pancake-auction",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx scripts/cli.ts dev",
+    "build": "next build && tsx scripts/clean-generated.ts",
+    "start": "tsx scripts/cli.ts start",
+    "migrate": "tsx scripts/cli.ts migrate",
+    "league:managers": "tsx scripts/cli.ts managers",
+    "seat:release": "tsx scripts/cli.ts release",
+    "import:sleeper": "tsx scripts/import.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run tests/rules.test.ts tests/import.test.ts",
+    "test:db": "tsx tests/db.ts",
+    "sim": "tsx scripts/sim.ts",
+    "verify": "tsx scripts/verify.ts",
+    "league:check": "tsx scripts/cli.ts check"
+  },
+  "dependencies": {
+    "next": "^16.0.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@types/pg": "^8.15.0",
+    "tsx": "^4.20.0",
+    "vitest": "^3.2.4",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "^16.0.0"
+  }
+}

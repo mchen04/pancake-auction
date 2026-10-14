@@ -1,0 +1,632 @@
+import assert from "node:assert/strict";
+import { spawn, type ChildProcess } from "node:child_process";
+import { createServer } from "node:net";
+import { mkdir, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { Client } from "pg";
+import { loadEnvironment, safeError } from "./env";
+import { auditDraft } from "./audit";
+import { Bot } from "./bot";
+import { createIsolated, dropIsolated, seedManagers, seedPlayers, sleep, sql, syntheticPool } from "../tests/support";
+import { schemaName } from "../lib/db";
+import { counts, legalPlacements, maxBid, taxiEligibility } from "../lib/rules";
+import type { AuctionState, Player } from "../lib/types";
+function option(name: string, fallback: string) {
+    const index = process.argv.indexOf(name);
+    return index < 0 ? fallback : process.argv[index + 1];
+}
+const runs = Number(option("--runs", "1"));
+const timing = option("--timing", "fast");
+const seed = Number(option("--seed", "42"));
+let randomState = seed >>> 0;
+function random() {
+    randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0;
+    return randomState / 4294967296;
+}
+async function freePort() {
+    return new Promise<number>(resolve => {
+        const server = createServer();
+        server.listen(0, "127.0.0.1", () => {
+            const address = server.address();
+            assert(address && typeof address === "object");
+            server.close(() => resolve(address.port));
+        });
+    });
+}
+async function build(evidence: string) {
+    const chunks: string[] = [];
+    const child = spawn("npm", ["run", "build"], {
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"]
+    });
+    child.stdout.on("data", chunk => chunks.push(String(chunk)));
+    child.stderr.on("data", chunk => chunks.push(String(chunk)));
+    const code = await new Promise(resolve => child.once("exit", resolve));
+    await writeFile(`${evidence}/sim/build.log`, chunks.join(""));
+    assert.equal(code, 0, "Production build must pass");
+}
+async function importedPool() {
+    const schema = schemaName();
+    const client = new Client({
+        connectionString: process.env.DATABASE_URL
+    });
+    await client.connect();
+    try {
+        const exists = (await client.query("SELECT to_regclass($1) AS name", [`${schema}.import_runs`])).rows[0].name;
+        if (exists) {
+            const imported = await client.query(`SELECT id FROM "${schema}".import_runs WHERE finished_at IS NOT NULL`);
+            if (imported.rowCount) {
+                const players: Player[] = (await client.query(`SELECT data FROM "${schema}".players`)).rows.map(
+                    r => r.data);
+                assert(players.length);
+                return {
+                    players,
+                    source: "live Sleeper import"
+                };
+            }
+        }
+        console.log("WARNING: no live import; using a synthetic player pool in an isolated schema.");
+        return {
+            players: syntheticPool(),
+            source: "synthetic fallback"
+        };
+    }
+    finally {
+        await client.end();
+    }
+}
+function reservedEndgamePlayers(players: Player[]) {
+    const lowFirst = [...players].sort((a, b) => (a.projection ?? -Infinity) - (b.projection ?? -Infinity));
+    const healthyTaxi = lowFirst.filter(p => taxiEligibility(p) === "eligible" && p.injuryStatus !== "Out");
+    const rookie = healthyTaxi.find(p => p.yearsExp === 0);
+    const lowGames = healthyTaxi.find(p => p.yearsExp !== 0 && p.careerGamesComplete && p.careerGames! < 65);
+    const ir = lowFirst.filter(p => p.injuryStatus === "Out" && taxiEligibility(p) !== "eligible").slice(0, 2);
+    assert(rookie && lowGames && ir.length === 2, "Imported pool needs rookie, low-GP and Out endgame players");
+    return [rookie, lowGames, ...ir];
+}
+class DraftDriver {
+    commissioner: Bot;
+    reconnects = 0;
+    simultaneousBids = 0;
+    snipes = 0;
+    private lastReport = 0;
+    private midDone = new Set<string>();
+    private midAt = {
+        pause: 35 + Math.floor(random() * 10),
+        undo: 75 + Math.floor(random() * 10),
+        force: 110 + Math.floor(random() * 10),
+        reconnect: 135 + Math.floor(random() * 10)
+    };
+    constructor(public bots: Bot[], public reserved: Player[]) {
+        this.commissioner = bots[0];
+    }
+    bot(id: number) {
+        return this.bots[id - 1];
+    }
+    async state() {
+        const failure = this.bots.find(bot => bot.failure)?.failure;
+        if (failure) {
+            throw failure;
+        }
+        const state = await this.commissioner.state();
+        if (Date.now() - this.lastReport > 30000) {
+            console.log(`${state.roster.filter(e => e.placement === "active").length}/200 active drafted`);
+            this.lastReport = Date.now();
+        }
+        return state;
+    }
+    available(state: AuctionState, managerId: number) {
+        const manager = state.managers.find(m => m.id === managerId)!;
+        const entries = state.roster.filter(e => e.managerId === managerId);
+        const sold = new Set(state.roster.map(e => e.playerId));
+        return state.players.filter(player => !sold.has(player.id) && maxBid(manager.budget, player, entries,
+            state.players) >= 1);
+    }
+    async nominate(player?: Player, amount = 1) {
+        let state = await this.state();
+        while (state.lot)
+            state = await this.finishByPasses(state);
+        assert.equal(state.draft.phase, "nomination");
+        const id = state.draft.nominatorId!;
+        const available = this.available(state, id);
+        const chosen = player || available.find(p => !this.reserved.some(reserved => reserved.id === p.id));
+        assert(chosen);
+        assert(available.some(p => p.id === chosen.id));
+        await this.bot(id).action({
+            type: "nominate",
+            playerId: chosen.id,
+            amount
+        });
+        return this.state();
+    }
+    async finishByPasses(state: AuctionState) {
+        if (!state.lot) {
+            return this.state();
+        }
+        const lot = state.lot;
+        const player = state.players.find(player => player.id === lot.playerId)!;
+        const canRaise = (bot: Bot) => {
+            const manager = state.managers.find(manager => manager.id === bot.id)!;
+            return maxBid(manager.budget, player, state.roster.filter(e => e.managerId === bot.id),
+                state.players) > lot.highBid;
+        };
+        await Promise.all(this.bots.filter(bot => bot.id !== lot.highBidderId && !state.passes.includes(bot.id)
+            && canRaise(bot)).map(bot => bot.action({
+            type: "pass",
+            lotId: lot.id
+        }, true)));
+        const next = await this.state();
+        assert(!next.lot || next.lot.id !== lot.id);
+        return next;
+    }
+    async waitForSale(lotId: number) {
+        let state = await this.state();
+        while (state.lot?.id === lotId) {
+            await sleep(200);
+            state = await this.state();
+        }
+        return state;
+    }
+    async capBids(lotId: number) {
+        for (let attempt = 0; attempt < 12; attempt++) {
+            const state = await this.state();
+            const bid = state.recentEvents.find(event => event.type === 'bid' && event.lotId === lotId);
+            if (bid && Number(bid.data.deadline) === Number(bid.data.now) + state.draft.capMs
+                && Number(bid.data.deadline) < Number(bid.data.beforeDeadline) + state.draft.extensionMs) return;
+            assert(state.lot?.id === lotId, 'Cap exercise must retain its open lot');
+            await this.bot(attempt % 2 + 1).action({
+                type: 'bid', lotId, amount: state.lot.highBid + 1
+            });
+        }
+        throw new Error('Accepted bids must exercise the deadline cap');
+    }
+    async timerPrelude() {
+        await this.commissioner.action({
+            type: "start"
+        });
+        let state = await this.state();
+        while (!state.lot) {
+            assert.equal(state.draft.status, "running");
+            await sleep(200);
+            state = await this.state();
+        }
+        const lotId = state.lot.id;
+        const amount = state.lot.highBid + 1;
+        this.simultaneousBids += this.bots.length;
+        await Promise.all(this.bots.map(bot => bot.action({
+            type: "bid",
+            lotId,
+            amount
+        }, true)));
+        state = await this.state();
+        assert.equal(state.lot!.id, lotId);
+        await this.bot(1).action({
+            type: "bid",
+            lotId,
+            amount: state.lot!.highBid + 1
+        });
+        state = await this.state();
+        await this.bot(2).action({
+            type: "bid",
+            lotId,
+            amount: state.lot!.highBid + 1
+        });
+        await this.capBids(lotId);
+        await this.commissioner.action({
+            type: "pause"
+        });
+        state = await this.state();
+        const remaining = state.draft.remainingMs;
+        await sleep(300);
+        assert.equal((await this.state()).draft.remainingMs, remaining);
+        await this.commissioner.action({
+            type: "resume"
+        });
+        await this.bot(3 + Math.floor(random() * 8)).reconnect();
+        this.reconnects++;
+        state = await this.state();
+        await sleep(Math.max(0, state.draft.deadline! - state.serverNow - 2000));
+        state = await this.state();
+        await this.bot(1).action({
+            type: "bid",
+            lotId,
+            amount: state.lot!.highBid + 1
+        });
+        this.snipes++;
+        await this.waitForSale(lotId);
+    }
+    async commissionerPrelude() {
+        let state = await this.state();
+        const rookie = this.available(state, state.draft.nominatorId!).find(player => player.yearsExp === 0
+            && !this.reserved.some(reserved => reserved.id === player.id));
+        assert(rookie);
+        state = await this.nominate(rookie);
+        const taxiOwner = state.lot!.highBidderId;
+        await this.commissioner.action({
+            type: "force",
+            lotId: state.lot!.id
+        });
+        await this.bot(taxiOwner).action({
+            type: "place",
+            playerId: rookie.id,
+            placement: "taxi"
+        });
+        state = await this.state();
+        const out = this.available(state, state.draft.nominatorId!).find(player =>
+            player.injuryStatus === "Out" && !this.reserved.some(reserved => reserved.id === player.id));
+        assert(out);
+        state = await this.nominate(out);
+        const irLot = state.lot!.id;
+        const irOwner = state.lot!.highBidderId;
+        await this.finishByPasses(state);
+        await this.bot(irOwner).action({
+            type: "place",
+            playerId: out.id,
+            placement: "ir"
+        });
+        state = await this.nominate();
+        assert(state.lot && state.lot.id !== irLot);
+        await this.commissioner.action({
+            type: "undo"
+        });
+        await this.commissioner.action({
+            type: "undo"
+        });
+        assert.equal((await this.state()).draft.status, "paused");
+        await this.commissioner.action({
+            type: "resume"
+        });
+    }
+    async midDraft(state: AuctionState) {
+        const active = state.roster.filter(entry => entry.placement === "active").length;
+        if (active >= this.midAt.reconnect && !this.midDone.has("reconnect")) {
+            await this.bot(1 + Math.floor(random() * 10)).reconnect();
+            this.reconnects++;
+            this.midDone.add("reconnect");
+        }
+        if (active >= this.midAt.pause && !this.midDone.has("pause")) {
+            await this.commissioner.action({
+                type: "pause"
+            });
+            await sleep(150);
+            await this.commissioner.action({
+                type: "resume"
+            });
+            this.midDone.add("pause");
+        }
+        if (active >= this.midAt.undo && !this.midDone.has("undo")) {
+            await this.commissioner.action({
+                type: "undo"
+            });
+            await this.commissioner.action({
+                type: "resume"
+            });
+            this.midDone.add("undo");
+            return false;
+        }
+        if (active >= this.midAt.force && !this.midDone.has("force") && state.lot) {
+            await this.commissioner.action({
+                type: "force",
+                lotId: state.lot.id
+            });
+            this.midDone.add("force");
+            return false;
+        }
+        return true;
+    }
+    async fillActive() {
+        let rounds = 0;
+        const started = Date.now();
+        while (true) {
+            let state = await this.state();
+            if (state.roster.filter(e => e.placement === "active").length === 200) {
+                return;
+            }
+            assert.equal(state.draft.status, "running");
+            assert(Date.now() - started < 40 * 60 * 1000, "Active draft must finish within forty minutes");
+            if (state.lot) {
+                await this.finishByPasses(state);
+                continue;
+            }
+            const nominator = state.draft.nominatorId!;
+            const entries = state.roster.filter(e => e.managerId === nominator);
+            if (counts(entries).active === 20) {
+                if (nominator === 1) {
+                    await this.bot(nominator).action({
+                        type: "done",
+                        done: true
+                    });
+                }
+                else {
+                    while ((await this.state()).draft.nominatorId === nominator)
+                        await sleep(200);
+                }
+                continue;
+            }
+            const manager = state.managers.find(m => m.id === nominator)!;
+            const player = this.available(state, nominator).find(p => !this.reserved.some(reserved =>
+                reserved.id === p.id) && legalPlacements(p, entries, state.players).includes("active"));
+            assert(player);
+            state = await this.nominate(player);
+            if (!await this.midDraft(state)) {
+                continue;
+            }
+            state = await this.state();
+            if (!state.lot) {
+                continue;
+            }
+            const lot = state.lot;
+            if (rounds < 5) {
+                const bidders = state.managers.filter(m => maxBid(m.budget, player, state.roster.filter(e =>
+                    e.managerId === m.id), state.players) > lot.highBid);
+                const bidder = bidders[Math.floor(random() * bidders.length)];
+                assert(bidder);
+                await this.bot(bidder.id).action({
+                    type: "bid",
+                    lotId: lot.id,
+                    amount: 2 + Math.floor(random() * 15)
+                });
+            }
+            else {
+                const candidates = state.managers.filter(m => m.id > 2).map(m => ({
+                    manager: m,
+                    max: maxBid(m.budget, player, state.roster.filter(e => e.managerId === m.id), state.players)
+                })).sort((a, b) => b.max - a.max);
+                if (candidates[0].max > lot.highBid) {
+                    await this.bot(candidates[0].manager.id).action({
+                        type: "bid",
+                        lotId: lot.id,
+                        amount: candidates[0].max
+                    });
+                }
+            }
+            state = await this.state();
+            await this.finishByPasses(state);
+            rounds++;
+            assert(manager.budget >= 1);
+        }
+    }
+    async lateAuctions() {
+        let state = await this.state();
+        assert.equal(state.roster.filter(e => e.placement === "active").length, 200);
+        for (const id of [1, 2]) {
+            if (state.managers.find(manager => manager.id === id)!.done) {
+                await this.bot(id).action({
+                    type: "done",
+                    done: false
+                });
+            }
+        }
+        for (const player of this.reserved) {
+            state = await this.state();
+            while (![1, 2].includes(state.draft.nominatorId!)) {
+                const id = state.draft.nominatorId!;
+                await this.bot(id).action({
+                    type: "done",
+                    done: true
+                });
+                state = await this.state();
+            }
+            const nominator = state.draft.nominatorId!;
+            const rival = nominator === 1 ? 2 : 1;
+            state = await this.nominate(player);
+            assert(state.lot);
+            const lotId = state.lot.id;
+            await this.bot(rival).action({
+                type: "done",
+                done: true
+            });
+            await this.bot(rival).action({
+                type: "bid",
+                lotId,
+                amount: 2
+            });
+            await this.bot(rival).action({
+                type: "done",
+                done: false
+            });
+            state = await this.state();
+            await this.finishByPasses(state);
+            state = await this.state();
+            const entry = state.roster.find(e => e.lotId === lotId)!;
+            assert.equal(entry.managerId, rival);
+            assert.equal(entry.placement, player.injuryStatus === "Out" ? "ir" : "taxi");
+            assert.equal(counts(state.roster.filter(e => e.managerId === rival)).active, 20);
+        }
+    }
+    async endgame(run: number) {
+        if (run % 3 === 1 && timing === "fast") {
+            await this.bot(1).action({
+                type: "done",
+                done: true
+            });
+            await this.bot(2).action({
+                type: "done",
+                done: true
+            });
+        }
+        else if (run % 3 === 0) {
+            await this.bot(1).action({
+                type: "done",
+                done: true
+            });
+        }
+        let state = await this.state();
+        while (state.draft.status !== "complete") {
+            assert(!state.lot, "Endgame must pass turns without new nominations");
+            await sleep(200);
+            state = await this.state();
+        }
+    }
+}
+async function stopServer(server: ChildProcess) {
+    if (server.exitCode !== null || server.signalCode !== null) {
+        return;
+    }
+    const stopped = new Promise<void>(resolve => server.once("exit", () => resolve()));
+    server.kill("SIGTERM");
+    await stopped;
+}
+async function runDraft(run: number, pool: Player[], source: string, evidence: string) {
+    const started = Date.now();
+    const schema = await createIsolated("sim");
+    let server: ChildProcess | undefined;
+    let serverLog = "";
+    let bots: Bot[] = [];
+    const result: Record<string, unknown> = {
+        run,
+        seed,
+        timing,
+        source,
+        leagueConfig: "league/managers.json",
+        clients: 10
+    };
+    try {
+        await seedPlayers(pool);
+        await seedManagers();
+        if (timing === "fast") {
+            await sql("UPDATE draft SET nomination_ms=10000,bidding_ms=5000,extension_ms=5000,cap_ms=15000");
+        }
+        const port = await freePort();
+        const base = `http://127.0.0.1:${port}`;
+        server = spawn(process.execPath, [
+            "node_modules/next/dist/bin/next",
+            "start",
+            "-p",
+            String(port)
+        ], {
+            env: {
+                ...process.env,
+                SEAT_COOKIE_SECURE: "false"
+            },
+            stdio: ["ignore", "pipe", "pipe"]
+        });
+        await writeFile(`${evidence}/sim/active.json`, JSON.stringify({
+            schema,
+            pid: process.pid,
+            serverPid: server.pid
+        }));
+        server.stdout!.on("data", chunk => {
+            serverLog += String(chunk);
+        });
+        server.stderr!.on("data", chunk => {
+            serverLog += String(chunk);
+        });
+        let ready = false;
+        for (let attempt = 0; attempt < 80; attempt++) {
+            try {
+                if ((await fetch(`${base}/api/state`)).ok) {
+                    ready = true;
+                    break;
+                }
+            }
+            catch {
+            }
+            await sleep(200);
+        }
+        assert(ready, "Server must start");
+        bots = Array.from({
+            length: 10
+        }, (_, index) => new Bot(index + 1, base));
+        await Promise.all(bots.map(bot => bot.claim()));
+        bots.forEach(bot => bot.startPolling());
+        const driver = new DraftDriver(bots, reservedEndgamePlayers(pool));
+        await driver.timerPrelude();
+        await driver.commissionerPrelude();
+        await driver.fillActive();
+        await driver.lateAuctions();
+        await driver.endgame(run);
+        await Promise.all(bots.map(bot => bot.stopPolling()));
+        const audited = await auditDraft();
+        result.audited = audited;
+        assert(audited.timers.nominationTimeouts > 0 && audited.timers.extensions > 0,
+            "Nomination timeout and accepted extensions must execute");
+        assert(audited.timers.caps > 0 && audited.timers.expirySales > 0,
+            "A capped bid and a deadline sale must execute");
+        assert(audited.taxiIrOnlyManagers.nominations >= 4 && audited.taxiIrOnlyManagers.bids >= 4);
+        assert(audited.taxiIrOnlyManagers.taxiSales >= 2 && audited.taxiIrOnlyManagers.irSales >= 2);
+        assert(audited.undos >= 2 && audited.forceEnds > 0 && audited.pauses > 0 && audited.giveUps > 0);
+        assert(driver.reconnects > 0 && driver.snipes > 0 && driver.simultaneousBids >= 10);
+        result.result = {
+            ...audited,
+            reconnects: driver.reconnects,
+            snipes: driver.snipes,
+            simultaneousBids: driver.simultaneousBids,
+            requests: bots.reduce((sum, bot) => sum + bot.requests, 0),
+            rejectedActionsByReason: Object.fromEntries(bots.flatMap(bot => Object.entries(bot.rejected))
+                .reduce((map, [reason, count]) => map.set(reason, (map.get(reason) || 0) + count),
+                new Map<string, number>()))
+        };
+        result.elapsedMs = Date.now() - started;
+        result.exitCode = 0;
+        console.log(`PASS full draft ${run}: 10 managers, 200 active, ${audited.finalRosterSize} total (${timing})`);
+    }
+    catch (error) {
+        result.error = safeError(error);
+        result.stack = error instanceof Error ? error.stack : undefined;
+        result.exitCode = 1;
+        throw error;
+    }
+    finally {
+        await Promise.all(bots.map(bot => bot.stopPolling()));
+        const events = (await sql("SELECT * FROM events ORDER BY id")).rows;
+        const players = (await sql("SELECT data FROM players ORDER BY id")).rows.map(row => row.data);
+        await writeFile(`${evidence}/sim/events-${timing}-${seed}-${run}.json`, JSON.stringify(events));
+        await writeFile(`${evidence}/sim/players-${timing}-${seed}-${run}.json`, JSON.stringify(players));
+        if (server) {
+            await stopServer(server);
+        }
+        await writeFile(`${evidence}/sim/run-${timing}-${seed}-${run}.json`, JSON.stringify(result, null, 2));
+        await writeFile(`${evidence}/sim/server-${timing}-${seed}-${run}.log`, serverLog);
+        if (!process.argv.includes("--keep-schema")) {
+            await dropIsolated(schema);
+        }
+    }
+}
+async function parallelRun(run: number, evidence: string) {
+    const args = [
+        'node_modules/tsx/dist/cli.mjs', 'scripts/sim.ts', '--runs', '1', '--timing', timing,
+        '--seed', String(seed + run - 1), '--run-index', String(run), '--skip-build'
+    ];
+    if (process.argv.includes('--keep-schema')) args.push('--keep-schema');
+    const child = spawn(process.execPath, args, {
+        env: process.env, stdio: ['ignore', 'pipe', 'pipe']
+    });
+    let output = '';
+    child.stdout.on('data', chunk => { output += String(chunk); process.stdout.write(chunk); });
+    child.stderr.on('data', chunk => { output += String(chunk); process.stderr.write(chunk); });
+    const exitCode = await new Promise<number>(resolve => child.once('exit', code => resolve(code ?? 1)));
+    await writeFile(`${evidence}/sim/worker-${timing}-${run}.log`, output);
+    assert.equal(exitCode, 0, `Full draft ${run} must pass`);
+}
+async function main() {
+    loadEnvironment();
+    assert(Number.isInteger(runs) && runs > 0 && Number.isFinite(seed));
+    assert(["fast", "real"].includes(timing));
+    const evidence = process.env.EVIDENCE_DIR;
+    if (!evidence || resolve(evidence).startsWith(resolve(".") + "/")) {
+        throw new Error("Set EVIDENCE_DIR outside the repository");
+    }
+    await mkdir(`${evidence}/sim`, {
+        recursive: true
+    });
+    const { players, source } = await importedPool();
+    if (!process.argv.includes("--skip-build")) {
+        await build(evidence);
+    }
+    if (runs === 1) {
+        const run = Number(option('--run-index', '1'));
+        await runDraft(run, players, source, evidence);
+    } else {
+        for (let first = 1; first <= runs; first += 3) {
+            const group = Array.from({ length: Math.min(3, runs - first + 1) }, (_, index) => first + index);
+            const results = await Promise.allSettled(group.map(run => parallelRun(run, evidence)));
+            const failure = results.find(result => result.status === 'rejected');
+            if (failure?.status === 'rejected') throw failure.reason;
+        }
+    }
+}
+main().catch(error => {
+    console.error(safeError(error));
+    process.exitCode = 1;
+});
