@@ -435,6 +435,7 @@ async function runDraft(run: number, pool: Player[], source: string, evidence: s
             snipes: driver.snipes,
             simultaneousBids: driver.simultaneousBids,
             requests: bots.reduce((sum, bot) => sum + bot.requests, 0),
+            abortedTransactionRetries: bots.reduce((sum, bot) => sum + bot.transactionRetries, 0),
             rejectedActionsByReason: Object.fromEntries(bots.flatMap(bot => Object.entries(bot.rejected))
                 .reduce((map, [reason, count]) => map.set(reason, (map.get(reason) || 0) + count),
                 new Map<string, number>()))

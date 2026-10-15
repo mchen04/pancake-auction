@@ -4,6 +4,7 @@ import { ConvexHttpClient } from 'convex/browser';
 import { api } from '../convex/_generated/api';
 import { unwrap, RuleError } from '../lib/client';
 import type { Action, AuctionState, Player } from '../lib/types';
+import { retryAbortedMutation } from '../lib/mutation-retry';
 const raceReasons = new Set([
     'Draft is paused', 'Draft is not in progress', 'It is not your nomination turn',
     'Player is no longer available', 'This lot has ended. Refresh and try the current lot.',
@@ -13,6 +14,7 @@ const raceReasons = new Set([
 export class Bot {
     token = '';
     requests = 0;
+    transactionRetries = 0;
     rejected: Record<string, number> = {};
     latest: AuctionState | null = null;
     private client: ConvexHttpClient;
@@ -25,7 +27,8 @@ export class Bot {
     onPoll: ((state: AuctionState) => Promise<void>) | undefined;
     constructor(public id: number, private base: string) { this.client = new ConvexHttpClient(base); }
     async claim() {
-        this.token = unwrap(await this.client.mutation(api.auction.claimSeat, { managerId: this.id }));
+        this.token = unwrap(await retryAbortedMutation(() =>
+            this.client.mutation(api.auction.claimSeat, { managerId: this.id }), () => this.transactionRetries++));
         await this.state();
     }
     async state(): Promise<AuctionState> {
@@ -45,7 +48,8 @@ export class Bot {
     }
     async action(action: Action, expectedRejection = false) {
         this.requests++;
-        const result = await this.client.mutation(api.auction.actOnDraft, { token: this.token, action });
+        const result = await retryAbortedMutation(() =>
+            this.client.mutation(api.auction.actOnDraft, { token: this.token, action }), () => this.transactionRetries++);
         if (!result.ok) {
             const reason = result.error.replace(/\$\d+/g, '$N');
             const key = `${result.status}: ${reason}`;
