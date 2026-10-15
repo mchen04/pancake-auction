@@ -34,20 +34,27 @@ export async function stopProcess(child: ChildProcess, signal: NodeJS.Signals = 
     child.kill(signal);
     await stopped;
 }
-async function requireClosedPort(port: number) {
-    await new Promise<void>((resolve, reject) => {
+async function portListening(port: number) {
+    return new Promise<boolean>((resolve, reject) => {
         const socket = createConnection({ host: '127.0.0.1', port });
         socket.once('connect', () => {
             socket.destroy();
-            reject(new Error(`Local backend listener ${port} did not stop`));
+            resolve(true);
         });
         socket.once('error', error => {
             socket.destroy();
-            if ('code' in error && error.code === 'ECONNREFUSED') resolve();
+            if ('code' in error && error.code === 'ECONNREFUSED') resolve(false);
             else reject(error);
         });
         socket.setTimeout(2000, () => { socket.destroy(); reject(new Error('Listener shutdown check timed out')); });
     });
+}
+export async function requireClosedPort(port: number) {
+    const deadline = performance.now() + 10000;
+    while (await portListening(port)) {
+        if (performance.now() >= deadline) throw new Error(`Local backend listener ${port} did not stop`);
+        await sleep(25);
+    }
 }
 export async function localBackend(label: string, fixtures = false) {
     const evidence = evidenceDirectory(process.env.EVIDENCE_DIR, true)!;

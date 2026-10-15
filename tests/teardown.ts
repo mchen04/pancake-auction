@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { writeFile } from 'node:fs/promises';
-import { createConnection } from 'node:net';
+import { createConnection, createServer } from 'node:net';
 import { basename } from 'node:path';
-import { localBackend, sleep } from '../scripts/local-backend';
+import { localBackend, requireClosedPort, sleep } from '../scripts/local-backend';
 
 function listening(port: number): Promise<boolean> {
     return new Promise((resolve, reject) => {
@@ -17,7 +17,30 @@ function listening(port: number): Promise<boolean> {
         socket.setTimeout(2000, () => { socket.destroy(); reject(new Error('Listener probe timed out')); });
     });
 }
+async function delayedShutdownControl() {
+    const server = createServer();
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert(address && typeof address !== 'string');
+    const port = address.port;
+    const before = await listening(port);
+    assert.equal(before, true, 'The listener remains open before its delayed shutdown');
+    const started = Date.now();
+    const stop = setTimeout(() => server.close(), 250);
+    try {
+        await requireClosedPort(port);
+        const elapsedMs = Date.now() - started;
+        assert(elapsedMs >= 200, 'Shutdown must await the actual listener instead of the parent exit');
+        const after = await listening(port);
+        assert.equal(after, false);
+        return { before, after, elapsedMs, result: 'passed' };
+    } finally {
+        clearTimeout(stop);
+        if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+}
 async function main() {
+    const waitControl = await delayedShutdownControl();
     const backend = await localBackend('teardown');
     const ports = [backend.identity.port, backend.identity.sitePort];
     const pids = [...new Set(ports.flatMap(port => execFileSync('/usr/sbin/lsof',
@@ -27,7 +50,7 @@ async function main() {
     const owned = listeners.filter(process_ => basename(process_.executable) === 'convex-local-backend'
         && (process_.executable.startsWith(backend.identity.directory + '/')
             || process_.executable.includes('/.convex/backend-binary-cache/')));
-    const proof: Record<string, unknown> = { name: 'Native backend shutdown closes both listener ports' };
+    const proof: Record<string, unknown> = { name: 'Native backend shutdown closes both listener ports', waitControl };
     let closed = false;
     try {
         assert.equal(owned.length, listeners.length);
