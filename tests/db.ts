@@ -5,7 +5,7 @@ import { api } from '../convex/_generated/api';
 import { AuctionClient } from '../lib/client';
 import { checkLeague } from '../scripts/readiness';
 import { counts, matching } from '../lib/rules';
-import type { Action, AuctionState, Entry } from '../lib/types';
+import type { AuctionState, Entry } from '../lib/types';
 import { safeError } from '../scripts/env';
 import { act, claimSeat, getState, restoreSeat, RuleError, configure, currentBackend,
     createIsolated, dropIsolated, seedManagers, seedPlayers, sleep, inspect, events, syntheticPool } from './support';
@@ -30,7 +30,7 @@ async function run(name: string, test: () => Promise<void>, initialized = true) 
         console.error(`FAIL ${name}: ${safeError(error)}`);
     } finally { await dropIsolated(isolated); }
 }
-async function reject(action: Action, token = tokens[0], status?: number) {
+async function reject(action: import('./support').TestAction, token = tokens[0], status?: number) {
     await assert.rejects(() => act(action, token), (error: unknown) =>
         error instanceof RuleError && (status === undefined || error.status === status));
 }

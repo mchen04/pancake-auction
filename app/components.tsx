@@ -1,7 +1,7 @@
 'use client';
 import { Fragment, useEffect, useState } from 'react';
 import {
-  canNominate, counts, legalPlacements, matching, maxBid, rankedDynastyAdp, slots, taxiEligibility
+  canNominate, counts, legalPlacements, matching, maxBid, rankedDynastyAdp, slots, taxiEligibility, timeoutNominee
 } from '../lib/rules';
 import type { Action, AuctionState, Draft, Entry, Manager, Placement, Player, RecentEvent } from '../lib/types';
 
@@ -30,16 +30,9 @@ function entriesOf(state: AuctionState, managerId: number | null) {
 function nameOf(state: AuctionState, managerId: number | null | undefined) {
   return state.managers.find(manager => manager.id === managerId)?.name ?? 'Unknown';
 }
-function timeoutPick(state: AuctionState, manager: Manager | undefined) {
-  if (!manager) return undefined;
-  const entries = entriesOf(state, manager.id);
-  const sold = new Set(state.roster.map(entry => entry.playerId));
-  return state.players.find(player => !sold.has(player.id)
-    && maxBid(manager.budget, player, entries, state.players) >= 1);
-}
 function timeoutText(state: AuctionState, manager: Manager | undefined) {
   if (manager && onlyReserveOpen(entriesOf(state, manager.id))) return 'Time out: the turn passes.';
-  const pick = timeoutPick(state, manager);
+  const pick = timeoutNominee(state, manager);
   return pick ? `Time out: ${pick.name} opens at $1.` : 'Time out: the turn passes.';
 }
 function upcomingNominators(state: AuctionState) {
@@ -278,7 +271,8 @@ export function PoolPanel(props: RoomProps & { opening: number }) {
                     <button className="nominate" disabled={props.busy || !props.connected} title={`Nominate at ${dollars(opening)}`}
                       onClick={event => {
                         event.stopPropagation();
-                        void send({ type: 'nominate', playerId: player.id, amount: opening });
+                        void send({ type: 'nominate', playerId: player.id, amount: opening,
+                          nominationGeneration: state.draft.nominationGeneration });
                       }}>
                       Nominate
                     </button>
@@ -698,7 +692,8 @@ export function RosterPanel(props: RoomProps) {
             </p>
             <button className="ghost small" disabled={props.busy || state.draft.status !== 'running'}
               title={pauseReason} aria-describedby={pauseReason ? `nomination-pause-${me.id}` : undefined}
-              onClick={() => void props.send({ type: 'done', done: !me.done })}>
+              onClick={() => void props.send({ type: 'done', done: !me.done,
+                nominationGeneration: state.draft.nominationGeneration })}>
               {me.done ? 'Nominate again' : 'Skip my nominations'}
             </button>
           </div>
@@ -804,10 +799,11 @@ export function CommissionerBar({ state, busy, send }: RoomProps) {
       <ConfirmButton key={`undo-${state.sales[0]?.id ?? 'none'}`} className="ghost small" label="Undo last sale"
         confirmLabel={undoLabel(state)} disabled={busy || !state.sales.length} title="Returns the player and refunds the price, then pauses"
         onConfirm={() => state.sales[0] && void send({ type: 'undo', lotId: state.sales[0].id })} />
-      <ConfirmButton key={`force-${state.lot?.id ?? 'none'}`} className="ghost small" label="Force end"
+      <ConfirmButton key={`force-${state.lot?.id}-${state.lot?.highBidderId}-${state.lot?.highBid}`} className="ghost small" label="Force end"
         confirmLabel={state.lot ? `Sell to ${nameOf(state, state.lot.highBidderId)} ${dollars(state.lot.highBid)}?` : 'Sell?'}
         disabled={busy || !state.lot} title="Sell now to the high bidder"
-        onConfirm={() => state.lot && void send({ type: 'force', lotId: state.lot.id })} />
+        onConfirm={() => state.lot && void send({ type: 'force', lotId: state.lot.id,
+          expectedHighBidderId: state.lot.highBidderId, expectedHighBid: state.lot.highBid })} />
       <button className="secondary small" disabled={busy}
         onClick={() => void send({ type: d.status === 'paused' ? 'resume' : 'pause' })}>
         {d.status === 'paused' ? 'Resume' : 'Pause'}

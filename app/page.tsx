@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useConvexConnectionState } from 'convex/react';
 import { api } from '../convex/_generated/api';
+import { useClockOffset } from './use-clock-offset';
 import {
   BlockPanel, CommissionerBar, PoolPanel, ResultsPanel, RosterPanel, TeamsPanel, turnsUntil
 } from './components';
@@ -27,12 +28,11 @@ export default function Room() {
   const connected = connection.isWebSocketConnected;
   const [connectionTimedOut, setConnectionTimedOut] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [offset, setOffset] = useState(0);
+  const offset = useClockOffset(connected, connection.connectionCount);
   const [tab, setTab] = useState<Tab>('players');
   const [opening, setOpening] = useState(1);
   const [turnSeen, setTurnSeen] = useState('');
   const pending = useRef(false);
-  const synchronize = useMutation(api.auction.syncTime);
   const claim = useMutation(api.auction.claimSeat);
   const restore = useMutation(api.auction.restoreSeat);
   const mutate = useMutation(api.auction.actOnDraft);
@@ -64,18 +64,6 @@ export default function Room() {
   }, [restore]);
 
   useEffect(() => {
-    if (!connected) return;
-    let cancelled = false;
-    const sent = Date.now();
-    void synchronize({}).then(result => {
-      if (!cancelled) setOffset(result.serverNow - (sent + Date.now()) / 2);
-    }).catch(failure => {
-      if (!cancelled) setError(failure instanceof Error ? failure.message : 'Clock synchronization failed');
-    });
-    return () => { cancelled = true; };
-  }, [connected, connection.connectionCount, synchronize]);
-
-  useEffect(() => {
     const timer = setTimeout(() => setConnectionTimedOut(true), 10000);
     return () => clearTimeout(timer);
   }, []);
@@ -92,13 +80,10 @@ export default function Room() {
     setBusy(true);
     setError('');
     try {
-      const sent = Date.now();
       const result = endpoint === 'claim' && 'managerId' in body
         ? await claim({ managerId: body.managerId })
         : 'type' in body ? await mutate({ token: token || '', action: body }) : null;
-      const received = Date.now();
       if (!result) throw new Error('Invalid action');
-      setOffset(result.serverNow - (sent + received) / 2);
       if (!result.ok) throw new Error(result.error);
       if (typeof result.value === 'string') {
         localStorage.setItem('pancake-seat', result.value);

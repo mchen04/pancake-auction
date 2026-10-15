@@ -9,7 +9,8 @@ const raceReasons = new Set([
     'Draft is paused', 'Draft is not in progress', 'It is not your nomination turn',
     'Player is no longer available', 'This lot has ended. Refresh and try the current lot.',
     'Bid arrived after the deadline', 'The high bidder cannot give up', 'You already gave up on this player',
-    'The latest sale has changed. Review it before undoing.'
+    'The latest sale has changed. Review it before undoing.', 'That nomination turn has ended',
+    'The high bid has changed. Review it before forcing a sale.'
 ]);
 export class Bot {
     token = '';
@@ -63,6 +64,10 @@ export class Bot {
         }
         await this.state();
         return true;
+    }
+    async preference(done: boolean) {
+        const state = await this.state();
+        return this.action({ type: 'done', done, nominationGeneration: state.draft.nominationGeneration });
     }
     startPolling(intervalMs = 500) {
         this.timer = setInterval(() => {

@@ -1,4 +1,4 @@
-import { canNominate, counts, legalPlacements, maxBid, nextDeadline, placementMax } from '../lib/rules';
+import { canNominate, counts, legalPlacements, maxBid, nextDeadline, placementMax, timeoutNominee } from '../lib/rules';
 import type { Action, AuctionState, Draft, Entry, Lot, Manager, Player } from '../lib/types';
 import type { MutationCtx, QueryCtx } from './_generated/server';
 import type { Doc } from './_generated/dataModel';
@@ -7,7 +7,8 @@ import { internal } from './_generated/api';
 export class RuleError extends Error {
     constructor(message: string, public status = 422) { super(message); }
 }
-export const initialDraft = (): Draft => ({ status: 'setup', phase: 'nomination', order: [], turnIndex: 0,
+export const initialDraft = (): Draft => ({ status: 'setup', nominationGeneration: '',
+    phase: 'nomination', order: [], turnIndex: 0,
     nominatorId: null, lotId: null, deadline: null, remainingMs: null, nominationMs: 10000, biddingMs: 10000,
     extensionMs: 5000, capMs: 15000, passedTurns: [], completionReason: null });
 export async function tokenHash(token: string) {
@@ -30,7 +31,8 @@ export async function load(ctx: QueryCtx, token?: string, includePool = true, fu
     const record = await draftRecord(ctx);
     const managers = await ctx.db.query('managers').withIndex('id').collect();
     const hash = token && /^[a-f0-9]{64}$/.test(token) ? await tokenHash(token) : null;
-    const draft: Draft = record?.value ?? initialDraft();
+    const draft: Draft = record ? { ...record.value,
+        nominationGeneration: record.value.nominationGeneration ?? `${record._id}:0` } : initialDraft();
     const latest = await ctx.db.query('imports').order('desc').first();
     const pool = includePool && fullPool ? await ctx.db.query('pools').unique() : null;
     const lot = draft.lotId === null ? null : await ctx.db.query('lots')
@@ -59,9 +61,15 @@ export async function load(ctx: QueryCtx, token?: string, includePool = true, fu
 export class Store {
     nextLot: number;
     nextEvent: number;
+    nominationSequence: number;
     constructor(public ctx: MutationCtx, public record: Doc<'drafts'>) {
         this.nextLot = record.nextLot;
         this.nextEvent = record.nextEvent;
+        this.nominationSequence = record.nominationSequence ?? 0;
+    }
+    renewNomination(s: AuctionState) {
+        this.nominationSequence++;
+        s.draft.nominationGeneration = `${this.record._id}:${this.nominationSequence}`;
     }
     async ensurePool(s: AuctionState) {
         s.players = (await this.ctx.db.query('pools').unique())?.players ?? [];
@@ -83,7 +91,7 @@ export class Store {
         }
         const version = this.record.version + 1;
         await this.ctx.db.patch(this.record._id, { value: s.draft, version,
-            nextLot: this.nextLot, nextEvent: this.nextEvent });
+            nextLot: this.nextLot, nextEvent: this.nextEvent, nominationSequence: this.nominationSequence });
         if (s.draft.status === 'running' && s.draft.deadline !== null) {
             await this.ctx.scheduler.runAt(s.draft.deadline, internal.auction.expire,
                 { draftId: this.record._id, lotId: s.draft.lotId, version, deadline: s.draft.deadline });
@@ -108,18 +116,15 @@ async function resumeRequiredNominations(client: Store, s: AuctionState, lotId: 
     for (const manager of s.managers) {
         if (!manager.done || counts(team(s, manager.id)).active === 20) continue;
         manager.done = false;
+        if (s.draft.phase === 'nomination') client.renewNomination(s);
         s.draft.passedTurns = s.draft.passedTurns.filter(id => id !== manager.id);
         
         await event(client, "done", manager.id, lotId, {
             done: false,
-            reason: "active-spot-opened"
+            reason: "active-spot-opened",
+            nominationGeneration: s.draft.nominationGeneration
         }, now);
     }
-}
-function available(s: AuctionState) {
-    const sold = new Set(s.roster.map(e => e.playerId));
-    return s.players.filter(p => !sold.has(p.id)).sort((a, b) =>
-        (b.projection ?? -Infinity) - (a.projection ?? -Infinity) || a.id.localeCompare(b.id));
 }
 function out(s: AuctionState, m: Manager) {
     if (!s.lot) {
@@ -162,6 +167,7 @@ async function turn(client: Store, s: AuctionState, from: number, now: number) {
         }
         d.turnIndex = index;
         d.nominatorId = m.id;
+        client.renewNomination(s);
         if (d.status === "paused") {
             d.deadline = null;
             d.remainingMs = d.nominationMs;
@@ -173,6 +179,7 @@ async function turn(client: Store, s: AuctionState, from: number, now: number) {
         await event(client, "turn", null, null, {
             index,
             nominatorId: m.id,
+            nominationGeneration: d.nominationGeneration,
             deadline: d.deadline,
             remainingMs: d.remainingMs
         }, now);
@@ -238,6 +245,7 @@ async function nominate(client: Store, s: AuctionState, m: Manager, player: Play
         amount,
         auto,
         nominationDeadline,
+        nominationGeneration: s.draft.nominationGeneration,
         deadline: s.draft.deadline,
         max: maxBid(m.budget, player, team(s, m.id), s.players)
     }, now);
@@ -279,7 +287,7 @@ async function advance(client: Store, s: AuctionState, now: number) {
         await turn(client, s, d.turnIndex + 1, now);
         return;
     }
-    const player = available(s).find(p => maxBid(m.budget, p, team(s, m.id), s.players) >= 1);
+    const player = timeoutNominee(s, m);
     if (player) {
         await nominate(client, s, m, player, 1, true, now);
     }
@@ -390,6 +398,7 @@ export async function act(ctx: MutationCtx, action: Action, token: string) {
             d.lotId = null;
             d.deadline = null;
             d.remainingMs = d.nominationMs;
+            client.renewNomination(s);
             await event(client, "undo", m.id, undone.id, {
                 playerId: undone.playerId,
                 winnerId: undone.highBidderId,
@@ -397,6 +406,7 @@ export async function act(ctx: MutationCtx, action: Action, token: string) {
                 placement: removed.placement,
                 voidLotId: s.lot?.id ?? null,
                 nominatorId: undone.nominatorId,
+                nominationGeneration: d.nominationGeneration,
                 remainingMs: d.remainingMs
             }, now);
             return;
@@ -408,8 +418,10 @@ export async function act(ctx: MutationCtx, action: Action, token: string) {
             d.remainingMs = Math.max(0, (d.deadline ?? now) - now);
             d.deadline = null;
             d.status = "paused";
+            client.renewNomination(s);
             await event(client, "pause", m.id, d.lotId, {
-                remainingMs: d.remainingMs
+                remainingMs: d.remainingMs,
+                nominationGeneration: d.nominationGeneration
             }, now);
             return;
         }
@@ -420,8 +432,10 @@ export async function act(ctx: MutationCtx, action: Action, token: string) {
             d.status = "running";
             d.deadline = now + (d.remainingMs ?? 0);
             d.remainingMs = null;
+            client.renewNomination(s);
             await event(client, "resume", m.id, d.lotId, {
-                deadline: d.deadline
+                deadline: d.deadline,
+                nominationGeneration: d.nominationGeneration
             }, now);
             await advance(client, s, now);
             return;
@@ -477,6 +491,10 @@ export async function act(ctx: MutationCtx, action: Action, token: string) {
         if (d.status !== "running" && action.type !== "force") {
             throw new RuleError("Draft is paused", 409);
         }
+        if ((action.type === 'nominate' || action.type === 'done')
+            && action.nominationGeneration !== d.nominationGeneration) {
+            throw new RuleError('That nomination turn has ended', 409);
+        }
         if (action.type === "done") {
             const c = counts(team(s, m.id));
             if (action.done && (c.active !== 20 || c.taxi === 3 && c.ir === 2)) {
@@ -493,7 +511,8 @@ export async function act(ctx: MutationCtx, action: Action, token: string) {
                 d.passedTurns = d.passedTurns.filter(id => id !== m.id);
             }
             await event(client, "done", m.id, d.lotId, {
-                done: m.done
+                done: m.done,
+                nominationGeneration: d.nominationGeneration
             }, now);
             if (d.phase === "nomination") {
                 if (d.nominatorId === m.id && m.done) {
@@ -510,7 +529,7 @@ export async function act(ctx: MutationCtx, action: Action, token: string) {
             if (d.phase !== "nomination" || d.nominatorId !== m.id) {
                 throw new RuleError("It is not your nomination turn", 409);
             }
-            const player = available(s).find(p => p.id === action.playerId);
+            const player = s.players.find(p => p.id === action.playerId && !s.roster.some(e => e.playerId === p.id));
             if (!player) {
                 throw new RuleError("Player is no longer available", 409);
             }
@@ -527,7 +546,11 @@ export async function act(ctx: MutationCtx, action: Action, token: string) {
         }
         const lot = s.lot;
         if (action.type === "force") {
-            await event(client, "force", m.id, lot.id, {}, now);
+            if (action.expectedHighBidderId !== lot.highBidderId || action.expectedHighBid !== lot.highBid) {
+                throw new RuleError('The high bid has changed. Review it before forcing a sale.', 409);
+            }
+            await event(client, "force", m.id, lot.id,
+                { highBidderId: lot.highBidderId, highBid: lot.highBid }, now);
             await award(client, s, "force", now);
             return;
         }

@@ -9,6 +9,15 @@ export function canNominate(state: AuctionState, manager: Manager | undefined): 
     return state.players.some(player => !sold.has(player.id)
         && maxBid(manager.budget, player, entries, state.players) >= 1);
 }
+export function timeoutNominee(state: AuctionState, manager: Manager | undefined): Player | undefined {
+    if (!manager || manager.done) return undefined;
+    const entries = state.roster.filter(entry => entry.managerId === manager.id);
+    if (counts(entries).active >= 20) return undefined;
+    const sold = new Set(state.roster.map(entry => entry.playerId));
+    return state.players.filter(player => !sold.has(player.id)).sort((a, b) =>
+        (b.projection ?? -Infinity) - (a.projection ?? -Infinity) || a.id.localeCompare(b.id))
+        .find(player => maxBid(manager.budget, player, entries, state.players) >= 1);
+}
 export const slots = [
     "PG",
     "SG",

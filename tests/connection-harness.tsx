@@ -13,6 +13,11 @@ const control = { sockets: [] as ControlledSocket[], poolHeld: false, holdPools:
     blocked: false, syncCalls: 0, cachedTimes: [] as number[], ready: false };
 Object.assign(window, { transport: control });
 localStorage.setItem('pancake-seat', config.token);
+const nativeFetch = window.fetch.bind(window);
+window.fetch = (input, init) => {
+    if (typeof init?.body === 'string' && JSON.parse(init.body).path === 'auction:syncTime') control.syncCalls++;
+    return nativeFetch(input, init);
+};
 
 class ControlledSocket extends EventTarget {
     static CONNECTING = 0;

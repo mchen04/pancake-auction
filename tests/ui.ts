@@ -120,7 +120,7 @@ async function main() {
             await browser('click', '.commish button:nth-child(2)');
             assert.deepEqual(await actions(), []);
             await browser('click', '.commish button:nth-child(2)');
-            assert.deepEqual(await actions(), [{ type: 'force', lotId: 101 }]);
+            assert.deepEqual(await actions(), [{ type: 'force', lotId: 101, expectedHighBidderId: 2, expectedHighBid: 1 }]);
         });
         await check('S5/C10 confirmation timeout negative control disarms after four seconds', async () => {
             await open('confirm');

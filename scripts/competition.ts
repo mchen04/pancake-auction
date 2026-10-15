@@ -37,7 +37,7 @@ export class Competition {
         return seededFraction(this.seed, `clock:${lotId}`) < rate;
     }
     planTurn(bot: Bot, state: AuctionState, strategy: Strategy) {
-        const key = `${bot.id}:${state.draft.deadline}`;
+        const key = `${bot.id}:${state.draft.nominationGeneration}`;
         const cached = this.turns.get(key);
         if (cached) return cached;
         const entries = state.roster.filter(entry => entry.managerId === bot.id);
@@ -66,7 +66,8 @@ export class Competition {
         const plan = this.planTurn(bot, state, strategy);
         if (plan.timeout || plan.attempted || !plan.player) return;
         plan.attempted = true;
-        if (await bot.action({ type: 'nominate', playerId: plan.player.id, amount: plan.amount }, true)) {
+        if (await bot.action({ type: 'nominate', playerId: plan.player.id, amount: plan.amount,
+            nominationGeneration: state.draft.nominationGeneration }, true)) {
             this.nominations++;
         }
     }

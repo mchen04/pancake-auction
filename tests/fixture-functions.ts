@@ -63,6 +63,7 @@ handler: async (ctx, args) => {
         else await ctx.db.insert('lots', row);
     }
     const store = new Store(ctx, record);
+    if (args.draft) store.renewNomination(state);
     if (args.roster) store.nextLot = Math.max(0, ...args.roster.map((entry: Entry) => entry.lotId)) + 1;
     await store.save(state);
 } });

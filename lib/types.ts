@@ -33,6 +33,7 @@ export interface Manager {
 }
 export interface Draft {
     status: "setup" | "running" | "paused" | "complete";
+    nominationGeneration: string;
     phase: "nomination" | "bidding";
     order: number[];
     turnIndex: number;
@@ -85,8 +86,10 @@ export type Action = {
 } | {
     type: "done";
     done: boolean;
+    nominationGeneration: string;
 } | {
     type: "nominate";
+    nominationGeneration: string;
     playerId: string;
     amount: number;
 } | {
@@ -94,8 +97,13 @@ export type Action = {
     lotId: number;
     amount: number;
 } | {
-    type: "pass" | "force";
+    type: "pass";
     lotId: number;
+} | {
+    type: "force";
+    lotId: number;
+    expectedHighBidderId: number;
+    expectedHighBid: number;
 } | {
     type: "place";
     playerId: string;

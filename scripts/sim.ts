@@ -108,6 +108,7 @@ class DraftDriver {
         assert(available.some(p => p.id === chosen.id));
         await this.bot(id).action({
             type: "nominate",
+            nominationGeneration: state.draft.nominationGeneration,
             playerId: chosen.id,
             amount
         });
@@ -218,6 +219,7 @@ class DraftDriver {
         const taxiOwner = state.lot!.highBidderId;
         await this.commissioner.action({
             type: "force",
+            expectedHighBidderId: state.lot!.highBidderId, expectedHighBid: state.lot!.highBid,
             lotId: state.lot!.id
         });
         await this.bot(taxiOwner).action({
@@ -275,6 +277,7 @@ class DraftDriver {
         if (active >= this.midAt.force && !this.midDone.has("force") && state.lot) {
             await this.commissioner.action({
                 type: "force",
+                expectedHighBidderId: state.lot.highBidderId, expectedHighBid: state.lot.highBid,
                 lotId: state.lot.id
             });
             this.midDone.add("force");
@@ -315,20 +318,14 @@ class DraftDriver {
         assert.equal(state.roster.filter(e => e.placement === "active").length, 200);
         for (const id of [1, 2]) {
             if (state.managers.find(manager => manager.id === id)!.done) {
-                await this.bot(id).action({
-                    type: "done",
-                    done: false
-                });
+                await this.bot(id).preference(false);
             }
         }
         for (const player of this.reserved) {
             state = await this.state();
             while (![1, 2].includes(state.draft.nominatorId!)) {
                 const id = state.draft.nominatorId!;
-                await this.bot(id).action({
-                    type: "done",
-                    done: true
-                });
+                await this.bot(id).preference(true);
                 state = await this.state();
             }
             const nominator = state.draft.nominatorId!;
@@ -336,19 +333,13 @@ class DraftDriver {
             state = await this.nominate(player);
             assert(state.lot);
             const lotId = state.lot.id;
-            await this.bot(rival).action({
-                type: "done",
-                done: true
-            });
+            await this.bot(rival).preference(true);
             await this.bot(rival).action({
                 type: "bid",
                 lotId,
                 amount: 2
             });
-            await this.bot(rival).action({
-                type: "done",
-                done: false
-            });
+            await this.bot(rival).preference(false);
             state = await this.state();
             await this.finishByPasses(state);
             state = await this.state();
@@ -360,20 +351,11 @@ class DraftDriver {
     }
     async endgame(run: number) {
         if (run % 3 === 1 && timing === "fast") {
-            await this.bot(1).action({
-                type: "done",
-                done: true
-            });
-            await this.bot(2).action({
-                type: "done",
-                done: true
-            });
+            await this.bot(1).preference(true);
+            await this.bot(2).preference(true);
         }
         else if (run % 3 === 0) {
-            await this.bot(1).action({
-                type: "done",
-                done: true
-            });
+            await this.bot(1).preference(true);
         }
         let state = await this.state();
         while (state.draft.status !== "complete") {

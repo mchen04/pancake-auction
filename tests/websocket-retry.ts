@@ -107,7 +107,8 @@ async function main() {
         await backend.admin('testOnly:configure', { draft: { biddingMs: 300000, capMs: 300000 },
             deadlineAfterMs: 300000 });
         let state = await http.state();
-        await http.act({ type: 'nominate', playerId: state.players[0].id, amount: 1 }, tokens[state.draft.nominatorId! - 1]);
+        await http.act({ type: 'nominate', playerId: state.players[0].id, amount: 1,
+            nominationGeneration: state.draft.nominationGeneration }, tokens[state.draft.nominatorId! - 1]);
         await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
         const address = server.address();
         assert(address && typeof address !== 'string');

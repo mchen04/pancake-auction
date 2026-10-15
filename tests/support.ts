@@ -60,7 +60,22 @@ export function currentClient() {
     return client;
 }
 export const getState = (token?: string) => currentClient().state(token);
-export const act = (action: Action, token?: string) => currentClient().act(action, token);
+export type TestAction = Action
+    | Omit<Extract<Action, { type: 'nominate' }>, 'nominationGeneration'>
+    | Omit<Extract<Action, { type: 'done' }>, 'nominationGeneration'>
+    | Omit<Extract<Action, { type: 'force' }>, 'expectedHighBidderId' | 'expectedHighBid'>;
+export async function act(action: TestAction, token?: string) {
+    if ((action.type === 'nominate' || action.type === 'done') && !('nominationGeneration' in action)) {
+        const snapshot = await getState();
+        return currentClient().act({ ...action, nominationGeneration: snapshot.draft.nominationGeneration }, token);
+    }
+    if (action.type === 'force' && !('expectedHighBidderId' in action)) {
+        const snapshot = await getState();
+        return currentClient().act({ ...action, expectedHighBidderId: snapshot.lot?.highBidderId ?? -1,
+            expectedHighBid: snapshot.lot?.highBid ?? -1 }, token);
+    }
+    return currentClient().act(action as Action, token);
+}
 export const claimSeat = (id: number) => currentClient().claim(id);
 export const restoreSeat = (token: string) => currentClient().restore(token);
 export const configure = (args: Record<string, unknown>) => currentBackend().admin('testOnly:configure', args);

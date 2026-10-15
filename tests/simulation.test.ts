@@ -16,7 +16,7 @@ function state(): AuctionState {
         })),
         lot: null,
         draft: {
-            status: 'running', phase: 'nomination', order: [], turnIndex: 0, nominatorId: 1, lotId: null,
+            status: 'running', nominationGeneration: 'fixture:1', phase: 'nomination', order: [], turnIndex: 0, nominatorId: 1, lotId: null,
             deadline: 11000, remainingMs: null, nominationMs: 10000, biddingMs: 10000, extensionMs: 5000,
             capMs: 15000, passedTurns: [], completionReason: null
         }

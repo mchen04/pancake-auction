@@ -159,6 +159,8 @@ export class Replay {
         assert(this.lot && event.lot_id === this.lot.id, `Wrong lot at event ${event.id}`);
         return this.lot;
     }
+    private nominationGeneration = '';
+    private nominationSequence = -1;
     apply(event: LoggedEvent) {
         const data = event.data;
         const now = Number(data.now);
@@ -166,6 +168,18 @@ export class Replay {
         this.coverage[event.type] = (this.coverage[event.type] || 0) + 1;
         assert(Number.isFinite(now));
         assert(event.created_at.getTime() + 1 >= now, `Event ${event.id} precedes the decision clock`);
+        if (typeof data.nominationGeneration === 'string') {
+            const [draftId, sequence] = data.nominationGeneration.split(':');
+            assert(draftId && Number.isSafeInteger(Number(sequence)));
+            if (this.nominationGeneration) {
+                assert.equal(draftId, this.nominationGeneration.split(':')[0]);
+                assert(Number(sequence) >= this.nominationSequence, 'Nomination generation cannot roll back');
+                if (event.type === 'nomination') assert.equal(data.nominationGeneration, this.nominationGeneration);
+                if (event.type === 'turn') assert(Number(sequence) > this.nominationSequence);
+            }
+            this.nominationGeneration = data.nominationGeneration;
+            this.nominationSequence = Number(sequence);
+        }
         switch (event.type) {
             case "start":
                 this.order = data.order as number[];

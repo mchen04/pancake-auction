@@ -17,7 +17,7 @@ export function roomFixture(): AuctionState {
         })),
         lot: { id: 101, playerId: players[0].id, nominatorId: 2, highBidderId: 2, highBid: 1, status: 'open' },
         draft: {
-            status: 'running', phase: 'bidding', order: managers.map((_, index) => index + 1), turnIndex: 1,
+            status: 'running', nominationGeneration: 'fixture:1', phase: 'bidding', order: managers.map((_, index) => index + 1), turnIndex: 1,
             nominatorId: 2, lotId: 101, deadline: Date.now() + 600000, remainingMs: null,
             nominationMs: 10000, biddingMs: 10000, extensionMs: 5000, capMs: 15000,
             passedTurns: [], completionReason: null
