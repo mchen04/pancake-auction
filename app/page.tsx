@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useConvexConnectionState } from 'convex/react';
 import { api } from '../convex/_generated/api';
 import {
@@ -68,7 +68,7 @@ export default function Room() {
     return () => clearTimeout(timer);
   }, [error]);
 
-  async function send(body: Action | { managerId: number }, endpoint = 'action') {
+  const send = useCallback(async (body: Action | { managerId: number }, endpoint = 'action') => {
     if (pending.current) return;
     pending.current = true;
     setBusy(true);
@@ -91,7 +91,7 @@ export default function Room() {
       setBusy(false);
       pending.current = false;
     }
-  }
+  }, [claim, mutate, token]);
 
   if (!state) {
     return <main className="gate"><h1 className="wordmark">Pancake Auction</h1>

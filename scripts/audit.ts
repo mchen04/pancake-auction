@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { Entry, Placement, Player } from "../lib/types";
-import { sql } from "../tests/support";
-type LoggedEvent = {
+import type { AuctionState, Lot } from "../lib/types";
+export type LoggedEvent = {
     id: string;
     type: string;
     manager_id: number | null;
@@ -410,20 +410,15 @@ export class Replay {
         }
     }
 }
-export async function auditDraft(requireFull = true) {
-    const players: Player[] = (await sql("SELECT data FROM players")).rows.map(row => row.data);
-    const managers = (await sql("SELECT id,budget,done FROM managers ORDER BY id")).rows;
+export async function auditDraft(snapshot: { state: AuctionState; events: LoggedEvent[]; lots: Lot[] },
+    requireFull = true) {
+    const players = snapshot.state.players;
+    const managers = snapshot.state.managers;
     const replay = new Replay(players, managers.map(manager => manager.id));
-    const events: LoggedEvent[] = (await sql("SELECT * FROM events ORDER BY id")).rows;
+    const events = snapshot.events;
     events.forEach(event => replay.apply(event));
     assert(replay.complete && !replay.lot, "Draft must complete");
-    const actual: Entry[] = (await sql("SELECT * FROM roster ORDER BY player_id")).rows.map(row => ({
-        playerId: row.player_id,
-        managerId: row.manager_id,
-        placement: row.placement,
-        price: row.price,
-        lotId: row.lot_id
-    }));
+    const actual = snapshot.state.roster;
     const byPlayer = (a: Entry, b: Entry) => a.playerId.localeCompare(b.playerId);
     assert.deepEqual([...actual].sort(byPlayer), [...replay.roster].sort(byPlayer));
     const teams = managers.map(manager => {
@@ -449,8 +444,10 @@ export async function auditDraft(requireFull = true) {
         };
     });
     assert.equal(new Set(replay.roster.map(entry => entry.playerId)).size, replay.roster.length);
-    const lotCounts = (await sql("SELECT status,count(*)::integer AS count FROM lots GROUP BY status")).rows;
-    const lots = Object.fromEntries(lotCounts.map(row => [row.status, row.count]));
+    const lots = snapshot.lots.reduce<Record<string, number>>((totals, lot) => {
+        totals[lot.status] = (totals[lot.status] || 0) + 1;
+        return totals;
+    }, {});
     assert.equal(lots.sold, replay.roster.length);
     return {
         players: players.length,

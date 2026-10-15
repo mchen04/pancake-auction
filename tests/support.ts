@@ -1,10 +1,8 @@
-import { mkdir, appendFile } from "node:fs/promises";
-import { randomBytes } from "node:crypto";
-import { Client } from "pg";
-import { begin, closeDatabase, schemaName } from "../lib/db";
-import { migrate } from "../scripts/migrate";
-import type { Player } from "../lib/types";
-import leagueManagers from "../league/managers.json";
+import { localBackend, sleep } from '../scripts/local-backend';
+import { AuctionClient, RuleError } from '../lib/client';
+import type { Action, Player } from '../lib/types';
+import type { LoggedEvent } from '../scripts/audit';
+export { RuleError, sleep };
 export function syntheticPool(): Player[] {
     return Array.from({
         length: 300
@@ -37,80 +35,44 @@ export function syntheticPool(): Player[] {
         adp: null
     }));
 }
-export async function createIsolated(prefix: "test" | "sim") {
-    process.env.DB_SCHEMA = `${prefix}_${randomBytes(8).toString("hex")}`;
-    if (process.env.EVIDENCE_DIR) {
-        await mkdir(process.env.EVIDENCE_DIR, {
-            recursive: true
-        });
-        await appendFile(`${process.env.EVIDENCE_DIR}/schemas.jsonl`, JSON.stringify({
-            schema: schemaName(),
-            action: "create",
-            at: new Date().toISOString()
-        }) + "\n");
-    }
-    await migrate();
-    return schemaName();
+
+let backend: Awaited<ReturnType<typeof localBackend>> | undefined;
+let client: AuctionClient | undefined;
+export async function createIsolated(prefix: 'test' | 'sim') {
+    if (backend) throw new Error('Close the previous isolated backend first');
+    const name = `${prefix}-${crypto.randomUUID()}`;
+    backend = await localBackend(name, true);
+    client = new AuctionClient(backend.url);
+    return name;
 }
 export async function dropIsolated(name: string) {
-    await closeDatabase();
-    if (!/^(test|sim)_[a-z0-9_]+$/.test(name)) {
-        throw new Error("Refusing to drop a non-test schema");
-    }
-    const client = new Client({
-        connectionString: process.env.DATABASE_URL
-    });
-    await client.connect();
-    try {
-        await client.query(`DROP SCHEMA IF EXISTS "${name}" CASCADE`);
-        if (process.env.EVIDENCE_DIR) {
-            await appendFile(`${process.env.EVIDENCE_DIR}/schemas.jsonl`, JSON.stringify({
-                schema: name,
-                action: "drop",
-                at: new Date().toISOString()
-            }) + "\n");
-        }
-    }
-    finally {
-        await client.end();
-    }
+    if (!/^(test|sim)-/.test(name)) throw new Error('Invalid test backend name');
+    await backend?.close();
+    backend = undefined;
+    client = undefined;
 }
-export async function sql(text: string, values: unknown[] = []) {
-    const client = await begin();
-    try {
-        const result = await client.query(text, values);
-        await client.query("COMMIT");
-        return result;
-    }
-    catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-    }
-    finally {
-        client.release();
-    }
+export function currentBackend() {
+    if (!backend) throw new Error('Start an isolated local backend first');
+    return backend;
 }
-export async function seedManagers() {
-    if (!/^(test|sim)_/.test(schemaName())) {
-        throw new Error("Test setup requires an isolated schema");
-    }
-    await sql(`
-    INSERT INTO managers(name,commissioner)
-    SELECT item->>'name',(item->>'commissioner')::boolean
-    FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY AS entries(item,sequence)
-    ORDER BY sequence
-  `, [JSON.stringify(leagueManagers)]);
+export function currentClient() {
+    if (!client) throw new Error('Start an isolated local backend first');
+    return client;
 }
-export async function recordFixtureImport() {
-    await sql(`INSERT INTO import_runs(started_at,sources,counts,coverage)
-        VALUES(clock_timestamp(),'["recorded-test-fixture"]',
-            jsonb_build_object('pool',(SELECT count(*) FROM players)),'{}')`);
-}
+export const getState = (token?: string) => currentClient().state(token);
+export const act = (action: Action, token?: string) => currentClient().act(action, token);
+export const claimSeat = (id: number) => currentClient().claim(id);
+export const restoreSeat = (token: string) => currentClient().restore(token);
+export const configure = (args: Record<string, unknown>) => currentBackend().admin('testOnly:configure', args);
+export const inspect = () => currentBackend().admin('admin:inspect');
+export async function seedManagers() { await currentBackend().admin('admin:managers'); }
 export async function seedPlayers(players = syntheticPool()) {
-    await sql(`
-    INSERT INTO players(id,data) SELECT item->>'id',item FROM jsonb_array_elements($1::jsonb)
-    item ON CONFLICT(id) DO UPDATE SET data=EXCLUDED.data
-`, [JSON.stringify(players)]);
-    await recordFixtureImport();
+    await currentBackend().admin('admin:importPlayers', { players, fetchedAt: new Date().toISOString(),
+        startedAt: Date.now(), sources: ['recorded-test-fixture'], counts: { pool: players.length }, coverage: {} });
 }
-export const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+export async function events(): Promise<LoggedEvent[]> {
+    const data = await inspect();
+    return data.events.map((row: { id: number; type: string; managerId: number | null; lotId: number | null;
+        data: Record<string, unknown>; at: number }) => ({ id: String(row.id), type: row.type,
+        manager_id: row.managerId, lot_id: row.lotId, data: row.data, created_at: new Date(row.at) }));
+}

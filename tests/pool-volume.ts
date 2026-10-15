@@ -1,70 +1,72 @@
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { types } from 'pg';
-import { NextRequest } from 'next/server';
-import { GET } from '../app/api/state/route';
-import { loadEnvironment, safeError } from '../scripts/env';
-import { createIsolated, dropIsolated, recordFixtureImport, seedManagers, sql } from './support';
-
-let bytes = 0;
-let playerBytes = 0;
-types.setTypeParser(114, raw => {
-    bytes += Buffer.byteLength(raw);
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed[0]?.positions) playerBytes += Buffer.byteLength(raw);
-    return parsed;
-});
+import { ConvexClient } from 'convex/browser';
+import { api } from '../convex/_generated/api';
+import recorded from './fixtures/sleeper-pool.json';
+import type { Player } from '../lib/types';
+import { safeError } from '../scripts/env';
+import { createIsolated, dropIsolated, seedManagers, seedPlayers, claimSeat, getState, act, currentBackend, sleep } from './support';
 async function main() {
-    loadEnvironment();
-    const root = process.env.EVIDENCE_DIR;
-    if (!root) throw new Error('Set EVIDENCE_DIR');
-    await mkdir(root, { recursive: true });
-    const schema = await createIsolated('test');
+    const isolated = await createIsolated('test');
+    const poolFrames: { frameBytes: number; resultBytes: number; players: number }[] = [];
+    class MeasuredSocket extends WebSocket {
+        constructor(url: string | URL, protocols?: string | string[]) {
+            super(url, protocols);
+            this.addEventListener('message', event => {
+                if (typeof event.data !== 'string') return;
+                const frame = JSON.parse(event.data) as { type: string; modifications?: {
+                    type: string; value?: { revision?: string; players?: unknown[] } }[] };
+                if (frame.type !== 'Transition') return;
+                for (const update of frame.modifications ?? []) {
+                    if (update.type === 'QueryUpdated' && update.value?.revision && update.value.players?.length) {
+                        poolFrames.push({ frameBytes: Buffer.byteLength(event.data),
+                            resultBytes: Buffer.byteLength(JSON.stringify(update.value)),
+                            players: update.value.players.length });
+                    }
+                }
+            });
+        }
+    }
+    const client = new ConvexClient(currentBackend().url, { webSocketConstructor: MeasuredSocket });
+    const deliveries: { kind: string; bytes: number; status?: string }[] = [];
+    const subscriptions: (() => void)[] = [];
     try {
         await seedManagers();
-        await sql('INSERT INTO players SELECT * FROM auction.players');
-        await sql(`INSERT INTO import_runs(started_at,sources,counts,coverage)
-            VALUES(clock_timestamp(),'["local source copy"]',
-            json_build_object('pool',(SELECT count(*) FROM players)),'{}')`);
-        const first = await GET(new NextRequest('http://localhost/api/state'));
-        const initial = await first.json();
-        const results = [];
-        for (const status of ['setup', 'setup', 'setup', 'running', 'running', 'running']) {
-            await sql('UPDATE draft SET status=$1', [status]);
-            bytes = 0;
-            playerBytes = 0;
-            const response = await GET(new NextRequest(
-                `http://localhost/api/state?players=0&poolRevision=${initial.poolRevision ?? '0'}`));
-            const body = await response.text();
-            results.push({ status, responseStatus: response.status, dbJsonBytes: bytes,
-                dbPlayerJsonBytes: playerBytes, responseBytes: Buffer.byteLength(body),
-                responsePlayerCount: JSON.parse(body).players.length });
-        }
-        await writeFile(`${root}/pool-volume.json`, JSON.stringify(results, null, 2));
-        console.log(JSON.stringify(results));
-        if (!process.argv.includes('--measure-only')) {
-            assert(results.every(result => result.dbPlayerJsonBytes === 0),
-                'Warm state polls must not transfer the pool');
-            assert(results.every(result => result.dbJsonBytes < 10000));
-            await recordFixtureImport();
-            const changed = await GET(new NextRequest(
-                `http://localhost/api/state?poolRevision=${initial.poolRevision}`));
-            const refreshed = await changed.json();
-            assert.notEqual(refreshed.poolRevision, initial.poolRevision);
-            assert.equal(refreshed.players.length, initial.players.length);
-            const known = await GET(new NextRequest(
-                `http://localhost/api/state?poolRevision=${refreshed.poolRevision}`));
-            const knownPool = await known.json();
-            assert.equal(knownPool.players.length, 0);
-            const newClient = await GET(new NextRequest('http://localhost/api/state'));
-            assert.equal((await newClient.json()).players.length, initial.players.length);
-            await writeFile(`${root}/pool-protocol.json`, JSON.stringify({
-                firstPool: initial.players.length, staleRevisionPool: refreshed.players.length,
-                knownRevisionPool: knownPool.players.length, newClientPool: initial.players.length
-            }, null, 2));
-        }
+        await seedPlayers(recorded.players as Player[]);
+        const token = await claimSeat(1);
+        const initial = await getState(token);
+        subscriptions.push(client.onUpdate(api.auction.pool, { revision: initial.poolRevision }, pool => {
+            deliveries.push({ kind: 'pool', bytes: Buffer.byteLength(JSON.stringify(pool)) });
+        }));
+        subscriptions.push(client.onUpdate(api.auction.state, { token }, state => {
+            assert.equal(state.players.length, 0);
+            deliveries.push({ kind: 'state', bytes: Buffer.byteLength(JSON.stringify(state)), status: state.draft.status });
+        }));
+        await sleep(100);
+        for (let id = 2; id <= 10; id++) await claimSeat(id);
+        await sleep(100);
+        const setup = deliveries.filter(item => item.kind === 'state' && item.status === 'setup');
+        assert(setup.length >= 2);
+        assert.equal(deliveries.filter(item => item.kind === 'pool').length, 1);
+        assert.equal(poolFrames.length, 1, 'The wire must carry the pool only once');
+        await act({ type: 'start' }, token);
+        await act({ type: 'pause' }, token);
+        await act({ type: 'resume' }, token);
+        await sleep(100);
+        assert.equal(deliveries.filter(item => item.kind === 'pool').length, 1);
+        assert.equal(poolFrames.length, 1, 'Draft changes must not resend the pool on the wire');
+        assert(deliveries.some(item => item.kind === 'state' && item.status === 'running'));
+        assert(deliveries.filter(item => item.kind === 'state').every(item => item.bytes < 10000));
+        const root = process.env.EVIDENCE_DIR!;
+        await mkdir(root, { recursive: true });
+        await writeFile(`${root}/pool-volume.json`, JSON.stringify({ players: initial.players.length,
+            poolDeliveries: deliveries.filter(item => item.kind === 'pool').length,
+            poolFrames, deliveries }, null, 2));
+        console.log('PASS setup and running subscriptions deliver the pool once across draft changes');
     } finally {
-        await dropIsolated(schema);
+        subscriptions.forEach(stop => stop());
+        await client.close();
+        await dropIsolated(isolated);
     }
 }
 main().catch(error => { console.error(safeError(error)); process.exitCode = 1; });

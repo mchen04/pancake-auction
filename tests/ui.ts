@@ -7,6 +7,9 @@ import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 
+import { roomFixture } from './room-fixture';
+import { createIsolated, dropIsolated, seedManagers, seedPlayers, claimSeat, configure, currentBackend, getState, act } from './support';
+
 const execute = promisify(execFile);
 const require = createRequire(resolve('package.json'));
 const { build }: typeof import('esbuild') = require('esbuild');
@@ -32,12 +35,34 @@ async function main() {
     await mkdir(dir, { recursive: true });
     await build({ entryPoints: ['tests/ui-harness.tsx'], outfile: `${dir}/bundle.js`, bundle: true,
         platform: 'browser', format: 'iife', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' } });
+    const isolated = await createIsolated('test');
+    await seedManagers();
+    const initial = roomFixture();
+    await seedPlayers(initial.players.slice(0, 1));
+    const tokens = await Promise.all(initial.managers.map(manager => claimSeat(manager.id)));
+    await configure({ draft: { nominationMs: 600000, biddingMs: 600000 } });
+    const added = { ...initial.players[1], id: 'review-new', name: 'Review Added Player' };
     const server = createServer(async (request, response) => {
-        if (request.url === '/bundle.js') {
+        if (request.url?.startsWith('/fixture/')) {
+            if (request.url.endsWith('replace')) await seedPlayers([initial.players[0], added]);
+            if (request.url.endsWith('live')) {
+                await act({ type: 'start' }, tokens[0]);
+                const state = await getState();
+                await act({ type: 'nominate', playerId: added.id, amount: 1 }, tokens[state.draft.nominatorId! - 1]);
+            }
+            if (request.url.endsWith('win')) {
+                const state = await getState();
+                if (state.lot!.highBidderId !== 1) await act({ type: 'bid', lotId: state.lot!.id, amount: 2 }, tokens[0]);
+                await act({ type: 'force', lotId: state.lot!.id }, tokens[0]);
+            }
+            response.end('{}');
+        } else if (request.url === '/bundle.js') {
             response.setHeader('Content-Type', 'text/javascript');
             response.end(await readFile(`${dir}/bundle.js`));
         } else response.end('<!doctype html><html><body>'
-            + '<div id="root"></div><script src="/bundle.js"></script></body></html>');
+            + '<div id="root"></div><script>window.roomConfig='
+            + JSON.stringify({ url: currentBackend().url, token: tokens[0] })
+            + '</script><script src="/bundle.js"></script></body></html>');
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
@@ -137,6 +162,7 @@ async function main() {
     } finally {
         try { await browser('close'); } finally {
             await new Promise<void>(resolve => server.close(() => resolve()));
+            await dropIsolated(isolated);
             await writeFile(`${dir}/results.json`, JSON.stringify(results, null, 2));
         }
     }

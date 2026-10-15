@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Room from '../app/page';
+import { AuctionProvider } from '../app/provider';
 import { BlockPanel, CommissionerBar, PoolPanel } from '../app/components';
 import { roomFixture } from './room-fixture';
 import type { Action, AuctionState } from '../lib/types';
@@ -42,33 +43,14 @@ function ConfirmCase() {
         <CommissionerBar state={state} me={state.managers[0]} busy={false} connected send={send} />
     </>;
 }
-let server = roomFixture();
-server.lot = null;
-server.draft = { ...server.draft, status: 'setup', phase: 'nomination', nominatorId: null, deadline: null };
-server.players = server.players.slice(0, 1);
-const added = { ...roomFixture().players[1], id: 'review-new', name: 'Review Added Player' };
-window.fetch = async url => {
-    window.testRequests.push(String(url));
-    const query = new URL(String(url), location.origin).searchParams;
-    const state = structuredClone(server);
-    if (query.get('players') === '0' || query.get('poolRevision') === state.poolRevision) state.players = [];
-    return new Response(JSON.stringify(state), { status: 200 });
-};
 function RoomCase() {
+    const config = (window as unknown as { roomConfig: { url: string; token: string } }).roomConfig;
+    localStorage.setItem('pancake-seat', config.token);
     return <>
-        <button id="replace" onClick={() => {
-            server = { ...server, poolRevision: '2', players: [...server.players, added] };
-        }}>Replace pool</button>
-        <button id="live" onClick={() => {
-            server = { ...server, draft: { ...server.draft, status: 'running', phase: 'bidding', nominatorId: 2 },
-                lot: { id: 102, playerId: added.id, player: added, nominatorId: 2,
-                    highBidderId: 2, highBid: 1, status: 'open' } };
-        }}>New player lot</button>
-        <button id="win" onClick={() => {
-            server = { ...server, lot: null, draft: { ...server.draft, phase: 'nomination' },
-                roster: [{ playerId: added.id, managerId: 1, placement: 'active', price: 1, lotId: 102 }] };
-        }}>Win new player</button>
-        <Room />
+        <button id="replace" onClick={() => void fetch('/fixture/replace')}>Replace pool</button>
+        <button id="live" onClick={() => void fetch('/fixture/live')}>New player lot</button>
+        <button id="win" onClick={() => void fetch('/fixture/win')}>Win new player</button>
+        <AuctionProvider url={config.url}><Room /></AuctionProvider>
     </>;
 }
 function AdpCase() {

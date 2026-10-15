@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { act, claimSeat, getState, RuleError } from '../lib/engine';
+import { act, claimSeat, getState, RuleError } from './support';
 import { counts } from '../lib/rules';
-import { loadEnvironment, safeError } from '../scripts/env';
-import { createIsolated, dropIsolated, seedManagers, seedPlayers, sleep, sql } from './support';
+import { safeError } from '../scripts/env';
+import { createIsolated, dropIsolated, seedManagers, seedPlayers, sleep, configure } from './support';
 import type { AuctionState } from '../lib/types';
 
 const results: { name: string; result: string; error?: string }[] = [];
@@ -16,7 +16,7 @@ async function scenario(name: string, test: () => Promise<void>) {
         await seedManagers();
         await seedPlayers();
         tokens = await Promise.all(Array.from({ length: 10 }, (_, i) => claimSeat(i + 1)));
-        await sql('UPDATE draft SET nomination_ms=600000,bidding_ms=600000');
+        await configure({ draft: { nominationMs: 600000, biddingMs: 600000 } });
         await test();
         results.push({ name, result: 'passed' });
         console.log(`PASS ${name}`);
@@ -60,8 +60,8 @@ async function stalePass(control: boolean) {
     const victim = state.draft.nominatorId!;
     const rookie = state.roster.find(entry => entry.managerId === victim
         && state.players.find(player => player.id === entry.playerId)!.yearsExp === 0)!;
-    await sql("UPDATE draft SET nomination_ms=100,deadline=clock_timestamp()+interval '100 milliseconds'");
-    await sleep(130);
+    await configure({ draft: { nominationMs: 1000 }, deadlineAfterMs: 1000 });
+    await sleep(1100);
     state = await getState();
     assert(state.draft.passedTurns.includes(victim));
     await act({ type: 'place', playerId: rookie.playerId, placement: 'taxi' }, tokens[victim - 1]);
@@ -69,7 +69,7 @@ async function stalePass(control: boolean) {
     state = await getState();
     for (let turn = 0; turn < 12 && state.draft.status === 'running'
         && state.draft.nominatorId !== victim; turn++) {
-        await sleep(130);
+        await sleep(1100);
         state = await getState();
     }
     assert.equal(counts(state.roster.filter(entry => entry.managerId === victim)).active, 19);
@@ -129,7 +129,6 @@ async function sales() {
     return { a: a.lot!.id, b: b.lot!.id };
 }
 async function main() {
-    loadEnvironment();
     if (!root) throw new Error('Set EVIDENCE_DIR');
     await mkdir(`${root}/review-db`, { recursive: true });
     await scenario('B1/C1 stale timeout is cleared when Active moves to Taxi', () => stalePass(false));
@@ -138,15 +137,15 @@ async function main() {
         let state = await fullDraft();
         const victim = state.draft.nominatorId!;
         const entry = state.roster.find(entry => entry.managerId === victim)!;
-        await sql("UPDATE draft SET nomination_ms=100,deadline=clock_timestamp()+interval '100 milliseconds'");
-        await sleep(130);
+        await configure({ draft: { nominationMs: 1000 }, deadlineAfterMs: 1000 });
+        await sleep(1100);
         state = await getState();
         assert(state.draft.passedTurns.includes(victim));
         await act({ type: 'place', playerId: entry.playerId, placement: 'active' }, tokens[victim - 1]);
         state = await getState();
         assert(state.draft.passedTurns.includes(victim));
         for (let turn = 0; turn < 12 && state.draft.status === 'running'; turn++) {
-            await sleep(130);
+            await sleep(1100);
             state = await getState();
         }
         assert.equal(state.draft.status, 'complete');

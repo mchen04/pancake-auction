@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { act, claimSeat, getState } from '../lib/engine';
+import { act, claimSeat, getState } from './support';
 import { canNominate, counts, legalPlacements, maxBid, taxiEligibility } from '../lib/rules';
 import type { AuctionState, Placement } from '../lib/types';
 import { Replay } from '../scripts/audit';
-import { loadEnvironment, safeError } from '../scripts/env';
-import { createIsolated, dropIsolated, seedManagers, seedPlayers, sql } from './support';
+import { safeError } from '../scripts/env';
+import { createIsolated, dropIsolated, seedManagers, seedPlayers, configure, events } from './support';
 
 const results: { name: string; result: string; error?: string }[] = [];
 let tokens: string[];
@@ -15,7 +15,7 @@ async function scenario(name: string, test: () => Promise<void>) {
         await seedManagers();
         await seedPlayers();
         tokens = await Promise.all(Array.from({ length: 10 }, (_, i) => claimSeat(i + 1)));
-        await sql('UPDATE draft SET nomination_ms=600000,bidding_ms=600000,cap_ms=600000');
+        await configure({ draft: { nominationMs: 600000, biddingMs: 600000, capMs: 600000 } });
         await test();
         await checkReplay();
         results.push({ name, result: 'passed' });
@@ -30,7 +30,7 @@ async function scenario(name: string, test: () => Promise<void>) {
 async function checkReplay() {
     const state = await getState();
     const replay = new Replay(state.players, state.managers.map(manager => manager.id));
-    for (const event of (await sql('SELECT * FROM events ORDER BY id')).rows) replay.apply(event);
+    for (const event of (await events())) replay.apply(event);
     for (const manager of state.managers) {
         assert.equal(replay.done.has(manager.id), manager.done);
         assert.equal(replay.budgets.get(manager.id), manager.budget);
@@ -94,8 +94,8 @@ async function expectResumed(victim: number) {
     assert.equal(state.draft.nominatorId, victim);
 }
 async function automaticEvent(victim: number) {
-    const events = (await sql("SELECT * FROM events WHERE type='done' AND manager_id=$1", [victim])).rows;
-    assert(events.some(event => event.data.done === false && event.data.reason === 'active-spot-opened'));
+    const logged = (await events()).filter(event => event.type === 'done' && event.manager_id === victim);
+    assert(logged.some(event => event.data.done === false && event.data.reason === 'active-spot-opened'));
 }
 async function move(control: 'no-move' | 'explicit-resume' | 'automatic', placement: Placement = 'taxi') {
     const { state } = await fullDraft();
@@ -152,7 +152,6 @@ async function undo(control: 'explicit-resume' | 'automatic' | 'taxi' | 'ir') {
     await expectResumed(victim);
 }
 async function main() {
-    loadEnvironment();
     const root = process.env.EVIDENCE_DIR;
     assert(root);
     await mkdir(`${root}/done-db`, { recursive: true });

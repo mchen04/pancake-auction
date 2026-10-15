@@ -57,5 +57,7 @@ export const inspect = internalQuery({ args: {}, handler: async ctx => ({
         id: manager.id, name: manager.name, commissioner: manager.commissioner, budget: manager.budget,
         done: manager.done, claimed: manager.tokenHash !== null })),
     roster: await ctx.db.query('roster').collect(), lots: await ctx.db.query('lots').collect(),
-    events: await ctx.db.query('events').withIndex('id').collect(), imports: await ctx.db.query('imports').collect()
+    events: await ctx.db.query('events').withIndex('id').collect(), imports: await ctx.db.query('imports').collect(),
+    pool: await ctx.db.query('pools').unique().then(pool => pool
+        ? { revision: pool.revision, count: pool.players.length } : null)
 }) });

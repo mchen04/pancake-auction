@@ -6,10 +6,9 @@ import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { buildPool } from '../lib/import-data';
-import { loadEnvironment, safeError } from '../scripts/env';
+import { safeError } from '../scripts/env';
 import { importFixture } from './import-fixture';
-import { createIsolated, dropIsolated, seedManagers, seedPlayers, sleep, sql } from './support';
-import type { AuctionState } from '../lib/types';
+import { createIsolated, dropIsolated, seedManagers, seedPlayers, sleep, configure, currentBackend, getState } from './support';
 
 const execute = promisify(execFile);
 const session = `pancake-import-${randomBytes(6).toString('hex')}`;
@@ -40,7 +39,6 @@ async function stop(server: ChildProcess) {
     await exit;
 }
 async function main() {
-    loadEnvironment();
     const root = process.env.EVIDENCE_DIR;
     if (!root) throw new Error('Set EVIDENCE_DIR');
     await mkdir(root, { recursive: true });
@@ -54,10 +52,10 @@ async function main() {
         const raw = importFixture();
         await seedManagers();
         await seedPlayers(buildPool(raw).players);
-        await sql('UPDATE draft SET nomination_ms=600000,bidding_ms=600000');
+        await configure({ draft: { nominationMs: 600000, biddingMs: 600000 } });
         const port = await freePort();
         server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '-p', String(port)], {
-            env: { ...process.env, SEAT_COOKIE_SECURE: 'false' }, stdio: ['ignore', 'pipe', 'pipe']
+            env: { ...process.env, CONVEX_URL: currentBackend().url }, stdio: ['ignore', 'pipe', 'pipe']
         });
         server.stdout!.on('data', data => { serverLog += String(data); });
         server.stderr!.on('data', data => { serverLog += String(data); });
@@ -65,7 +63,7 @@ async function main() {
         let ready = false;
         for (let attempt = 0; attempt < 50; attempt++) {
             if (server.exitCode !== null) break;
-            try { ready = (await fetch(`${base}/api/state`)).ok; } catch {}
+            try { ready = (await fetch(base)).ok; } catch {}
             if (ready) break;
             await sleep(200);
         }
@@ -83,20 +81,25 @@ async function main() {
         const imported = spawnSync(process.execPath, [
             '--import', 'tsx', '--import', resolve('tests/import-fetch.mjs'), 'scripts/import.ts', '--apply'
         ], {
-            encoding: 'utf8', env: { ...process.env, EVIDENCE_DIR: dir, IMPORT_TEST_FIXTURE: fixture }, timeout: 30000
+            encoding: 'utf8', env: { ...process.env, EVIDENCE_DIR: dir, IMPORT_TEST_FIXTURE: fixture,
+                CONVEX_LOCAL_DIR: `${currentBackend().identity.directory}/.convex/local/default` }, timeout: 30000
         });
         await writeFile(`${dir}/import.log`, safeError(new Error(imported.stdout + imported.stderr)));
         assert.equal(imported.status, 0);
         receipt.poolRefreshedWithoutReload = await visible('.pool', name);
         await browser('find', 'role', 'button', 'click', '--name', 'Start draft', '--exact');
-        let state: AuctionState = await (await fetch(`${base}/api/state`)).json();
+        let state = await getState();
         for (let attempt = 0; attempt < 30 && state.draft.status === 'setup'; attempt++) {
             await sleep(100);
-            state = await (await fetch(`${base}/api/state`)).json();
+            state = await getState();
         }
         assert.equal(state.draft.status, 'running');
-        await sql("UPDATE draft SET deadline=clock_timestamp()-interval '1 second'");
-        state = await (await fetch(`${base}/api/state`)).json();
+        await configure({ deadlineAfterMs: 10 });
+        for (let attempt = 0; attempt < 50; attempt++) {
+            state = await getState();
+            if (state.lot) break;
+            await sleep(50);
+        }
         assert.equal(state.lot?.playerId, playerId);
         receipt.livePlayerVisible = await visible('.block', name);
         const controls = await browser('eval', 'Boolean(document.querySelector(".bid-controls"))');
@@ -113,7 +116,7 @@ async function main() {
         await browser('find', 'role', 'button', 'click', '--name', 'Force end', '--exact');
         await browser('click', '.commish .armed');
         receipt.winningRosterVisible = await visible('.roster', name);
-        state = await (await fetch(`${base}/api/state`)).json();
+        state = await getState();
         assert(state.roster.some(entry => entry.playerId === playerId && entry.managerId === 1));
         receipt.browserErrors = await browser('errors');
         await writeFile(`${dir}/after-sale.txt`, await browser('snapshot'));

@@ -1,16 +1,15 @@
 import { evidenceDirectory } from "./evidence";
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
-import { createServer } from "node:net";
+import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
-import { Client } from "pg";
-import { loadEnvironment, safeError } from "./env";
+import poolFixture from "../tests/fixtures/sleeper-pool.json";
+import { safeError } from "./env";
 import { auditDraft } from "./audit";
 import { Bot } from "./bot";
 import { Competition } from "./competition";
 import { assertFloors, recordSpread } from "./simulation-results";
-import { createIsolated, dropIsolated, seedManagers, seedPlayers, sleep, sql, syntheticPool } from "../tests/support";
-import { schemaName } from "../lib/db";
+import { createIsolated, dropIsolated, seedManagers, seedPlayers, sleep, configure, inspect, events, getState, currentBackend } from "../tests/support";
+
 import { counts, maxBid, taxiEligibility } from "../lib/rules";
 import type { AuctionState, Player } from "../lib/types";
 function option(name: string, fallback: string) {
@@ -25,16 +24,6 @@ function random() {
     randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0;
     return randomState / 4294967296;
 }
-async function freePort() {
-    return new Promise<number>(resolve => {
-        const server = createServer();
-        server.listen(0, "127.0.0.1", () => {
-            const address = server.address();
-            assert(address && typeof address === "object");
-            server.close(() => resolve(address.port));
-        });
-    });
-}
 async function build(evidence: string) {
     const chunks: string[] = [];
     const child = spawn("npm", ["run", "build"], {
@@ -48,34 +37,7 @@ async function build(evidence: string) {
     assert.equal(code, 0, "Production build must pass");
 }
 async function importedPool() {
-    const schema = schemaName();
-    const client = new Client({
-        connectionString: process.env.DATABASE_URL
-    });
-    await client.connect();
-    try {
-        const exists = (await client.query("SELECT to_regclass($1) AS name", [`${schema}.import_runs`])).rows[0].name;
-        if (exists) {
-            const imported = await client.query(`SELECT id FROM "${schema}".import_runs WHERE finished_at IS NOT NULL`);
-            if (imported.rowCount) {
-                const players: Player[] = (await client.query(`SELECT data FROM "${schema}".players`)).rows.map(
-                    r => r.data);
-                assert(players.length);
-                return {
-                    players,
-                    source: "live Sleeper import"
-                };
-            }
-        }
-        console.log("WARNING: no live import; using a synthetic player pool in an isolated schema.");
-        return {
-            players: syntheticPool(),
-            source: "synthetic fallback"
-        };
-    }
-    finally {
-        await client.end();
-    }
+    return { players: poolFixture.players as Player[], source: `recorded Sleeper pool (${poolFixture.fetchedAt})` };
 }
 function reservedEndgamePlayers(players: Player[]) {
     const lowFirst = [...players].sort((a, b) => (a.projection ?? -Infinity) - (b.projection ?? -Infinity));
@@ -421,19 +383,9 @@ class DraftDriver {
         }
     }
 }
-async function stopServer(server: ChildProcess) {
-    if (server.exitCode !== null || server.signalCode !== null) {
-        return;
-    }
-    const stopped = new Promise<void>(resolve => server.once("exit", () => resolve()));
-    server.kill("SIGTERM");
-    await stopped;
-}
 async function runDraft(run: number, pool: Player[], source: string, evidence: string) {
     const started = Date.now();
     const schema = await createIsolated("sim");
-    let server: ChildProcess | undefined;
-    let serverLog = "";
     let bots: Bot[] = [];
     const result: Record<string, unknown> = {
         run,
@@ -446,47 +398,10 @@ async function runDraft(run: number, pool: Player[], source: string, evidence: s
     try {
         await seedPlayers(pool);
         await seedManagers();
-        if (timing === "fast") {
-            await sql("UPDATE draft SET nomination_ms=3000,bidding_ms=3000,extension_ms=1500,cap_ms=4500");
+        if (timing === 'fast') {
+            await configure({ draft: { nominationMs: 3000, biddingMs: 3000, extensionMs: 1500, capMs: 4500 } });
         }
-        const port = await freePort();
-        const base = `http://127.0.0.1:${port}`;
-        server = spawn(process.execPath, [
-            "node_modules/next/dist/bin/next",
-            "start",
-            "-p",
-            String(port)
-        ], {
-            env: {
-                ...process.env,
-                SEAT_COOKIE_SECURE: "false"
-            },
-            stdio: ["ignore", "pipe", "pipe"]
-        });
-        await writeFile(`${evidence}/sim/active.json`, JSON.stringify({
-            schema,
-            pid: process.pid,
-            serverPid: server.pid
-        }));
-        server.stdout!.on("data", chunk => {
-            serverLog += String(chunk);
-        });
-        server.stderr!.on("data", chunk => {
-            serverLog += String(chunk);
-        });
-        let ready = false;
-        for (let attempt = 0; attempt < 80; attempt++) {
-            try {
-                if ((await fetch(`${base}/api/state`)).ok) {
-                    ready = true;
-                    break;
-                }
-            }
-            catch {
-            }
-            await sleep(200);
-        }
-        assert(ready, "Server must start");
+        const base = currentBackend().url;
         bots = Array.from({
             length: 10
         }, (_, index) => new Bot(index + 1, base));
@@ -499,7 +414,8 @@ async function runDraft(run: number, pool: Player[], source: string, evidence: s
         await driver.lateAuctions();
         await driver.endgame(run);
         await Promise.all(bots.map(bot => bot.stopPolling()));
-        const audited = await auditDraft();
+        const audited = await auditDraft({ state: await getState(),
+            events: await events(), lots: (await inspect()).lots });
         result.audited = audited;
         assertFloors(audited);
         assert(audited.timers.nominationTimeouts > 0 && audited.timers.extensions > 0,
@@ -535,16 +451,14 @@ async function runDraft(run: number, pool: Player[], source: string, evidence: s
     }
     finally {
         await Promise.all(bots.map(bot => bot.stopPolling()));
-        const events = (await sql("SELECT * FROM events ORDER BY id")).rows;
-        const players = (await sql("SELECT data FROM players ORDER BY id")).rows.map(row => row.data);
-        await writeFile(`${evidence}/sim/events-${timing}-${seed}-${run}.json`, JSON.stringify(events));
-        await writeFile(`${evidence}/sim/players-${timing}-${seed}-${run}.json`, JSON.stringify(players));
-        if (server) {
-            await stopServer(server);
-        }
-        await writeFile(`${evidence}/sim/run-${timing}-${seed}-${run}.json`, JSON.stringify(result, null, 2));
-        await writeFile(`${evidence}/sim/server-${timing}-${seed}-${run}.log`, serverLog);
-        if (!process.argv.includes("--keep-schema")) {
+        try {
+            const logged = await events();
+            const players = (await getState()).players;
+            await writeFile(`${evidence}/sim/events-${timing}-${seed}-${run}.json`, JSON.stringify(logged));
+            await writeFile(`${evidence}/sim/players-${timing}-${seed}-${run}.json`, JSON.stringify(players));
+            await writeFile(`${evidence}/sim/run-${timing}-${seed}-${run}.json`, JSON.stringify(result, null, 2));
+        } finally {
+            await Promise.all(bots.map(bot => bot.close()));
             await dropIsolated(schema);
         }
     }
@@ -566,7 +480,6 @@ async function parallelRun(run: number, evidence: string) {
     assert.equal(exitCode, 0, `Full draft ${run} must pass`);
 }
 async function main() {
-    loadEnvironment();
     assert(Number.isInteger(runs) && runs > 0 && Number.isFinite(seed));
     assert(["fast", "real"].includes(timing));
     const evidence = evidenceDirectory(process.env.EVIDENCE_DIR, true)!;

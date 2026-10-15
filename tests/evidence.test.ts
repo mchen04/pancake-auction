@@ -54,8 +54,8 @@ async function fileCount(directory: string): Promise<number> {
 async function privateSource(parent: string) {
     const source = `${parent}/source`;
     const files = [
-        'package.json', 'scripts/import.ts', 'scripts/evidence.ts', 'scripts/env.ts',
-        'lib/db.ts', 'lib/import-data.ts', 'lib/import-cache.ts', 'lib/rules.ts', 'lib/types.ts',
+        'package.json', 'scripts/import.ts', 'scripts/evidence.ts', 'scripts/env.ts', 'scripts/admin-client.ts', 'scripts/local-cli.mjs',
+        'lib/import-data.ts', 'lib/import-cache.ts', 'lib/rules.ts', 'lib/types.ts',
         'tests/import-fetch.mjs', 'tests/import-fixture.ts', 'tests/fixtures/sleeper.json'
     ];
     for (const file of files) await cp(resolve(file), `${source}/${file}`);
@@ -95,7 +95,6 @@ describe('C14 physical evidence containment', () => {
                     '--import', `${source}/tests/import-fetch.mjs`, `${source}/scripts/import.ts`
                 ], { cwd: source, encoding: 'utf8', timeout: 15000, env: {
                     PATH: process.env.PATH, NODE_ENV: 'test',
-                    PANCAKE_AUCTION_ENV_FILE: process.env.PANCAKE_AUCTION_ENV_FILE,
                     EVIDENCE_DIR: targets[kind], IMPORT_TEST_FETCH_LOG: fetchLog,
                     IMPORT_TEST_NOW: String(Date.UTC(2026, 9, 1))
                 } });

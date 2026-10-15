@@ -1,68 +1,63 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { getState } from '../lib/engine';
+import { AuctionClient } from '../lib/client';
 import { buildPool } from '../lib/import-data';
-import { loadEnvironment, safeError } from '../scripts/env';
-import { createIsolated, dropIsolated, seedManagers, seedPlayers, recordFixtureImport, sql } from './support';
+import { safeError } from '../scripts/env';
 import { importFixture } from './import-fixture';
-
-function child(args: string[], env: Record<string, string> = {}) {
-    const result = spawnSync(process.execPath, ['--import', 'tsx', ...args], {
-        encoding: 'utf8', timeout: 30000, env: { ...process.env, ...env }
-    });
-    assert.equal(result.status, 0, safeError(new Error(result.stderr)));
-    return result.stdout;
+import { createIsolated, dropIsolated, seedManagers, seedPlayers, claimSeat, configure,
+    currentBackend, sleep } from './support';
+async function child(args: string[], input: unknown, environment: Record<string, string> = {}) {
+    const process_ = spawn(process.execPath, ['--import', 'tsx', ...args], {
+        env: { PATH: process.env.PATH, NODE_ENV: 'test', ...environment }, stdio: ['pipe', 'pipe', 'pipe'] });
+    let output = '';
+    let error = '';
+    process_.stdout.on('data', part => { output += String(part); });
+    process_.stderr.on('data', part => { error += String(part); });
+    process_.stdin.end(JSON.stringify(input));
+    const code = await new Promise(resolve => process_.once('exit', resolve));
+    assert.equal(code, 0, error);
+    return output;
 }
 async function main() {
-    loadEnvironment();
-    const root = process.env.EVIDENCE_DIR;
-    if (!root) throw new Error('Set EVIDENCE_DIR');
-    const dir = `${root}/pool-process`;
+    const isolated = await createIsolated('test');
+    const dir = `${process.env.EVIDENCE_DIR}/pool-process`;
     await mkdir(`${dir}/import`, { recursive: true });
-    const schema = await createIsolated('test');
     try {
         const raw = importFixture();
         await seedManagers();
         await seedPlayers(buildPool(raw).players);
-        for (let i = 0; i < 8; i++) await recordFixtureImport();
-        const warm = await getState();
-        assert.equal(warm.poolRevision, "9");
+        const token = await claimSeat(1);
+        const warmClient = new AuctionClient(currentBackend().url);
+        const warm = await warmClient.state();
         const removed = warm.players[0].id;
         delete raw[0][removed];
-        const fixture = `${dir}/fixture.json`;
-        await writeFile(fixture, JSON.stringify(raw));
+        await writeFile(`${dir}/fixture.json`, JSON.stringify(raw));
         await writeFile(`${dir}/import/sleeper-2026.json`, JSON.stringify({
-            fetchedAt: new Date().toISOString(), data: raw
-        }));
-        child(['--import', resolve('tests/import-fetch.mjs'), 'scripts/import.ts', '--apply'], {
-            EVIDENCE_DIR: dir, IMPORT_TEST_FIXTURE: fixture
-        });
-        child(['tests/review-worker.ts', 'start']);
-        const current = await getState();
-        await sql("UPDATE draft SET deadline=clock_timestamp()-interval '1 second'");
-        const errors: string[] = [];
-        for (let i = 0; i < 2; i++) {
-            try { await getState(); } catch (error) { errors.push(safeError(error)); }
-        }
-        const fresh = JSON.parse(child(['tests/review-worker.ts', 'read']));
-        const receipt = {
-            name: 'B3/C5 warm setup process observes another process import and start before expiry',
-            warmPool: warm.players.length, currentPool: current.players.length,
-            warmRevision: warm.poolRevision, currentRevision: current.poolRevision,
-            removedStillCached: current.players.some(player => player.id === removed), expiredReadErrors: errors,
-            freshProcessControl: fresh.phase === 'bidding' && fresh.playerId !== removed
-        };
-        await writeFile(`${dir}/result.json`, JSON.stringify(receipt, null, 2));
-        assert.equal(current.poolRevision, "10");
-        assert.equal(receipt.removedStillCached, false);
-        assert.deepEqual(errors, []);
+            fetchedAt: new Date().toISOString(), data: raw }));
+        const args = ['--import', resolve('tests/import-fetch.mjs'), 'scripts/import.ts', '--apply'];
+        const imported = await child(args, {}, {
+            EVIDENCE_DIR: dir, IMPORT_TEST_FIXTURE: `${dir}/fixture.json`,
+            CONVEX_LOCAL_DIR: `${currentBackend().identity.directory}/.convex/local/default` });
+        await writeFile(`${dir}/import.log`, imported);
+        await configure({ draft: { nominationMs: 200 } });
+        await child(['tests/review-worker.ts'], { url: currentBackend().url, token, mode: 'start' });
+        await sleep(300);
+        const current = await warmClient.state();
+        const fresh = JSON.parse(await child(['tests/review-worker.ts'], { url: currentBackend().url, mode: 'read' }));
+        assert.notEqual(current.poolRevision, warm.poolRevision);
         assert.equal(current.players.length, warm.players.length - 1);
-        assert.equal(receipt.freshProcessControl, true);
-        console.log(`PASS ${receipt.name}`);
-    } finally {
-        await dropIsolated(schema);
-    }
+        assert(!current.players.some(player => player.id === removed));
+        assert.equal(current.draft.phase, 'bidding');
+        assert.notEqual(current.lot!.playerId, removed);
+        assert.equal(fresh.phase, 'bidding');
+        assert.notEqual(fresh.playerId, removed);
+        await writeFile(`${dir}/result.json`, JSON.stringify({
+            name: 'B3/C5 warm client observes cross-process import and start',
+            warmRevision: warm.poolRevision, revision: current.poolRevision, warmPool: warm.players.length,
+            currentPool: current.players.length, removedStillCached: false, freshProcessControl: true }, null, 2));
+        console.log('PASS B3/C5 warm client observes another process import and start before expiry');
+    } finally { await dropIsolated(isolated); }
 }
 main().catch(error => { console.error(safeError(error)); process.exitCode = 1; });

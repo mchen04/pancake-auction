@@ -26,26 +26,29 @@ function randomIndex(limit: number): number {
 export async function draftRecord(ctx: QueryCtx) {
     return ctx.db.query('drafts').withIndex('key', q => q.eq('key', 'auction')).unique();
 }
-export async function load(ctx: QueryCtx, token?: string, includePool = true): Promise<AuctionState> {
+export async function load(ctx: QueryCtx, token?: string, includePool = true, fullPool = true): Promise<AuctionState> {
     const record = await draftRecord(ctx);
     const managers = await ctx.db.query('managers').withIndex('id').collect();
     const hash = token && /^[a-f0-9]{64}$/.test(token) ? await tokenHash(token) : null;
     const draft: Draft = record?.value ?? initialDraft();
     const latest = await ctx.db.query('imports').order('desc').first();
-    const pool = includePool ? await ctx.db.query('pools').unique() : null;
+    const pool = includePool && fullPool ? await ctx.db.query('pools').unique() : null;
     const lot = draft.lotId === null ? null : await ctx.db.query('lots')
         .withIndex('id', q => q.eq('id', draft.lotId!)).unique();
     const cleanLot = (row: Doc<'lots'>): Lot => ({ id: row.id, playerId: row.playerId,
         nominatorId: row.nominatorId, highBidderId: row.highBidderId, highBid: row.highBid,
         status: row.status, player: row.player });
-    const sales = await ctx.db.query('lots').withIndex('status', q => q.eq('status', 'sold'))
+    const sales = includePool ? [] : await ctx.db.query('lots').withIndex('status', q => q.eq('status', 'sold'))
         .order('desc').take(30);
-    const recent = await ctx.db.query('events').withIndex('id').order('desc').take(30);
+    const recent = includePool ? [] : await ctx.db.query('events').withIndex('id').order('desc').take(30);
+    const roster = await ctx.db.query('roster').collect();
+    const neededPlayers = new Map(roster.map(entry => [entry.playerId, entry.player]));
+    if (lot) neededPlayers.set(lot.playerId, lot.player);
     return { poolRevision: latest?.revision ?? '0', draft,
         managers: managers.map(m => ({ id: m.id, name: m.name, commissioner: m.commissioner,
             budget: m.budget, done: m.done, claimed: m.tokenHash !== null })),
         me: hash ? managers.find(m => m.tokenHash === hash)?.id ?? null : null,
-        players: pool?.players ?? [], roster: (await ctx.db.query('roster').collect()).map(r => ({
+        players: pool?.players ?? (includePool ? [...neededPlayers.values()] : []), roster: roster.map(r => ({
             playerId: r.playerId, managerId: r.managerId, placement: r.placement as Entry['placement'],
             price: r.price, lotId: r.lotId })), lot: lot ? cleanLot(lot) : null,
         passes: lot ? (await ctx.db.query('passes').withIndex('lotId', q => q.eq('lotId', lot.id)).collect())
@@ -60,12 +63,17 @@ export class Store {
         this.nextLot = record.nextLot;
         this.nextEvent = record.nextEvent;
     }
+    async ensurePool(s: AuctionState) {
+        s.players = (await this.ctx.db.query('pools').unique())?.players ?? [];
+    }
     async updateLot(id: number, changes: Partial<Lot>) {
         const stored = await this.ctx.db.query('lots').withIndex('id', q => q.eq('id', id)).unique();
         if (!stored) throw new Error('Missing lot');
         await this.ctx.db.patch(stored._id, changes);
     }
     async save(s: AuctionState) {
+        if (this.nextEvent === this.record.nextEvent && this.nextLot === this.record.nextLot
+            && JSON.stringify(s.draft) === JSON.stringify(this.record.value)) return;
         const stored = await this.ctx.db.query('managers').collect();
         for (const manager of s.managers) {
             const before = stored.find(m => m.id === manager.id)!;
@@ -110,7 +118,8 @@ async function resumeRequiredNominations(client: Store, s: AuctionState, lotId: 
 }
 function available(s: AuctionState) {
     const sold = new Set(s.roster.map(e => e.playerId));
-    return s.players.filter(p => !sold.has(p.id));
+    return s.players.filter(p => !sold.has(p.id)).sort((a, b) =>
+        (b.projection ?? -Infinity) - (a.projection ?? -Infinity) || a.id.localeCompare(b.id));
 }
 function out(s: AuctionState, m: Manager) {
     if (!s.lot) {
@@ -132,6 +141,7 @@ async function complete(client: Store, s: AuctionState, reason: string, now: num
     }, now);
 }
 async function turn(client: Store, s: AuctionState, from: number, now: number) {
+    await client.ensurePool(s);
     const d = s.draft;
     d.lotId = null;
     d.phase = "nomination";
@@ -175,6 +185,7 @@ async function award(client: Store, s: AuctionState, reason: "deadline" | "all-o
     if (!lot || lot.status !== "open") {
         return;
     }
+    await client.ensurePool(s);
     const m = s.managers.find(m => m.id === lot.highBidderId)!;
     const player = s.players.find(p => p.id === lot.playerId);
     if (!player) throw new RuleError("Player is no longer available", 409);
@@ -192,7 +203,7 @@ async function award(client: Store, s: AuctionState, reason: "deadline" | "all-o
         price: lot.highBid,
         lotId: lot.id
     };
-    await client.ctx.db.insert("roster", entry);
+    await client.ctx.db.insert("roster", { ...entry, player });
     await event(client, "sale", m.id, lot.id, {
         ...entry,
         reason,
@@ -248,6 +259,7 @@ async function advance(client: Store, s: AuctionState, now: number) {
         }
         return;
     }
+    await client.ensurePool(s);
     const m = s.managers.find(m => m.id === d.nominatorId);
     if (!m || !canNominate(s, m)) {
         await turn(client, s, d.turnIndex + 1, now);
@@ -278,9 +290,10 @@ async function advance(client: Store, s: AuctionState, now: number) {
 export async function transaction<T>(ctx: MutationCtx, token: string | undefined,
     run: (client: Store, state: AuctionState, now: number) => Promise<T>) {
     const record = await draftRecord(ctx);
-    if (!record) throw new RuleError('League managers are not configured', 409);
+    if (!record) return { ok: false as const, error: 'League managers are not configured',
+        status: 409, serverNow: Date.now() };
     const store = new Store(ctx, record);
-    const state = await load(ctx, token);
+    const state = await load(ctx, token, true, false);
     const now = Date.now();
     await advance(store, state, now);
     try {
@@ -315,6 +328,7 @@ export async function act(ctx: MutationCtx, action: Action, token: string) {
             return;
         }
         if (action.type === "start") {
+            await client.ensurePool(s);
             if (d.status !== "setup") {
                 throw new RuleError("Draft has already started", 409);
             }
@@ -357,7 +371,8 @@ export async function act(ctx: MutationCtx, action: Action, token: string) {
             if (s.lot) {
                 await client.updateLot(s.lot.id, { status: "void" });
             }
-            const removed = await client.ctx.db.query('roster').withIndex('lotId', q => q.eq('lotId', undone.id)).unique();
+            const removed = await client.ctx.db.query('roster')
+                .withIndex('lotId', q => q.eq('lotId', undone.id)).unique();
             if (!removed) throw new Error('Sold lot has no roster entry');
             await client.ctx.db.delete(removed._id);
             await client.updateLot(undone.id, { status: 'undone' });
@@ -440,7 +455,8 @@ export async function act(ctx: MutationCtx, action: Action, token: string) {
                     throw new RuleError("This move would invalidate your standing bid");
                 }
             }
-            const stored = await client.ctx.db.query('roster').withIndex('playerId', q => q.eq('playerId', player.id)).unique();
+            const stored = await client.ctx.db.query('roster')
+                .withIndex('playerId', q => q.eq('playerId', player.id)).unique();
             await client.ctx.db.patch(stored!._id, { placement: action.placement });
             const previous = entry.placement;
             if (previous !== action.placement) {

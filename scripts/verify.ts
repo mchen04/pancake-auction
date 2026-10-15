@@ -1,16 +1,20 @@
 import { evidenceDirectory } from "./evidence";
 import { spawn } from "node:child_process";
-import { mkdir, readdir, writeFile } from "node:fs/promises";
-import { loadEnvironment, safeError } from "./env";
+import { mkdir, readdir, statfs, writeFile } from "node:fs/promises";
+import { safeError } from "./env";
 import { recordSpread } from "./simulation-results";
 async function main() {
     const started = Date.now();
-    loadEnvironment();
     const root = evidenceDirectory(process.env.EVIDENCE_DIR, true)!;
     const dir = `${root}/verify-${new Date().toISOString().replace(/[:.]/g, "-")}`;
     await mkdir(dir, {
         recursive: true
     });
+    const disk = await statfs(dir);
+    const freeBytes = disk.bavail * disk.bsize;
+    if (freeBytes < 1024 ** 3) {
+        throw new Error(`Local verification needs 1 GiB of free disk; available ${freeBytes} bytes`);
+    }
     const commands = [
         ["typecheck"],
         ["lint"],

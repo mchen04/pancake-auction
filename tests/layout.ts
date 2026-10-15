@@ -6,12 +6,12 @@ import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { resolve, basename } from 'node:path';
 import { promisify } from 'node:util';
-import { closeDatabase } from '../lib/db';
+import recorded from './fixtures/sleeper-pool.json';
 import { matching } from '../lib/rules';
 import type { Player } from '../lib/types';
-import { loadEnvironment, safeError } from '../scripts/env';
+import { safeError } from '../scripts/env';
 import { roomFixture } from './room-fixture';
-import { sql } from './support';
+import { createIsolated, dropIsolated, seedManagers, seedPlayers, claimSeat, configure, currentBackend } from './support';
 
 const execute = promisify(execFile);
 const require = createRequire(resolve('package.json'));
@@ -35,7 +35,7 @@ async function check(name: string, test: () => Promise<unknown>) {
     }
 }
 async function fixture() {
-    const players: Player[] = (await sql('SELECT data FROM auction.players ORDER BY id')).rows.map(row => row.data);
+    const players = recorded.players as Player[];
     const target = players.find(player => player.name === 'Giannis Antetokounmpo');
     assert(target && target.projectedStats && Object.keys(target.projectedStats).length >= 11);
     const owned: Player[] = [];
@@ -105,13 +105,17 @@ function assertBids(proof: Awaited<ReturnType<typeof evaluate>>) {
     assert(proof.bidControls.filter((control: { disabled: boolean }) => !control.disabled).length >= 4);
 }
 async function main() {
-    loadEnvironment();
     const root = process.env.EVIDENCE_DIR;
     assert(root);
     const dir = `${root}/layout`;
     await mkdir(dir, { recursive: true });
     const state = await fixture();
-    await closeDatabase();
+    const isolated = await createIsolated('test');
+    await seedManagers();
+    await seedPlayers(state.players);
+    const tokens = await Promise.all(state.managers.map(manager => claimSeat(manager.id)));
+    await configure({ roster: state.roster, draft: state.draft, lot: state.lot,
+        managers: [{ id: 1, budget: 335 }] });
     await writeFile(`${dir}/fixture.json`, JSON.stringify(state));
     await build({ entryPoints: ['tests/layout-harness.tsx'], outfile: `${dir}/bundle.js`, bundle: true,
         platform: 'browser', format: 'esm', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' } });
@@ -124,7 +128,13 @@ async function main() {
         + await readFile('app/globals.css', 'utf8');
     const server = createServer(async (request, response) => {
         const path = new URL(request.url!, 'http://localhost').pathname;
-        if (path === '/style.css') {
+        if (path === '/client-config.json') {
+            const player = request.url?.includes('player=short')
+                ? state.players.find(player => player.name === 'Jayson Tatum')! : state.lot!.player!;
+            await configure({ lot: { ...state.lot, playerId: player.id, player } });
+            response.setHeader('Content-Type', 'application/json');
+            response.end(JSON.stringify({ url: currentBackend().url, token: tokens[0] }));
+        } else if (path === '/style.css') {
             response.setHeader('Content-Type', 'text/css');
             response.end(css);
         } else if (path.endsWith('.woff2')) {
@@ -241,9 +251,10 @@ async function main() {
     } finally {
         try { await browser('close'); } finally {
             await new Promise<void>(resolve => server.close(() => resolve()));
+            await dropIsolated(isolated);
             await writeFile(`${dir}/results.json`, JSON.stringify(results, null, 2));
         }
     }
     assert(results.every(result => result.result === 'passed'), 'Layout regressions must pass');
 }
-main().catch(error => { console.error(safeError(error)); process.exitCode = 1; }).finally(closeDatabase);
+main().catch(error => { console.error(safeError(error)); process.exitCode = 1; });

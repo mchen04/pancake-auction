@@ -22,7 +22,7 @@ export const expire = internalMutation({ args: { draftId: v.id('drafts'), lotId:
         || record.value.status !== 'running' || record.value.lotId !== args.lotId
         || record.value.deadline !== args.deadline || Date.now() < args.deadline) return;
     const store = new Store(ctx, record);
-    const state = await load(ctx);
+    const state = await load(ctx, undefined, true, false);
     await advance(store, state, Date.now());
     await store.save(state);
 } });

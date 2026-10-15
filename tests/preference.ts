@@ -2,15 +2,14 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { createServer, type IncomingMessage } from 'node:http';
+import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { act, claimSeat, getState, RuleError } from '../lib/engine';
+import { act, claimSeat, getState, RuleError } from './support';
 import { counts } from '../lib/rules';
-import type { Action } from '../lib/types';
-import { loadEnvironment, safeError } from '../scripts/env';
-import { createIsolated, dropIsolated, seedManagers, seedPlayers, sleep, sql } from './support';
+import { safeError } from '../scripts/env';
+import { createIsolated, dropIsolated, seedManagers, seedPlayers, sleep, configure, currentBackend, events } from './support';
 
 const execute = promisify(execFile);
 const require = createRequire(resolve('package.json'));
@@ -36,7 +35,7 @@ async function rosterReady() {
     await seedManagers();
     await seedPlayers();
     const tokens = await Promise.all(Array.from({ length: 10 }, (_, index) => claimSeat(index + 1)));
-    await sql('UPDATE draft SET nomination_ms=600000,bidding_ms=600000,cap_ms=600000');
+    await configure({ draft: { nominationMs: 600000, biddingMs: 600000, capMs: 600000 } });
     await act({ type: 'start' }, tokens[0]);
     for (let index = 0; index < 20; index++) {
         let state = await getState();
@@ -49,11 +48,6 @@ async function rosterReady() {
     const state = await getState(tokens[0]);
     assert.equal(counts(state.roster.filter(entry => entry.managerId === 1)).active, 20);
     return tokens[0];
-}
-async function actionBody(request: IncomingMessage) {
-    const parts: Buffer[] = [];
-    for await (const part of request) parts.push(Buffer.from(part));
-    return JSON.parse(Buffer.concat(parts).toString()) as Action;
 }
 async function settled(done: boolean, paused: boolean) {
     const label = done ? 'Nominate again' : 'Skip my nominations';
@@ -85,13 +79,11 @@ async function clickPreference(done: boolean) {
     await settled(!done, false);
 }
 async function main() {
-    loadEnvironment();
     const root = process.env.EVIDENCE_DIR;
     assert(root);
     const dir = `${root}/preference`;
     await mkdir(dir, { recursive: true });
     const schema = await createIsolated('test');
-    const actions: Action[] = [];
     let closedBrowser = false;
     try {
         const token = await rosterReady();
@@ -101,15 +93,9 @@ async function main() {
         const server = createServer(async (request, response) => {
             const path = new URL(request.url!, 'http://localhost').pathname;
             try {
-                if (path === '/api/state') {
+                if (path === '/client-config.json') {
                     response.setHeader('Content-Type', 'application/json');
-                    response.end(JSON.stringify(await getState(token)));
-                } else if (path === '/api/action') {
-                    const action = await actionBody(request);
-                    actions.push(action);
-                    await act(action, token);
-                    response.setHeader('Content-Type', 'application/json');
-                    response.end(JSON.stringify({ ok: true }));
+                    response.end(JSON.stringify({ url: currentBackend().url, token }));
                 } else if (path === '/bundle.js') {
                     response.setHeader('Content-Type', 'text/javascript');
                     response.end(await readFile(`${dir}/bundle.js`));
@@ -159,14 +145,13 @@ async function main() {
                 const negativeName = `C18 paused Done ${done} server negative control returns 409 without changing Done`;
                 await check(negativeName, async () => {
                     const before = await getState(token);
-                    const denied = await fetch(`${base}/api/action`, { method: 'POST',
-                        body: JSON.stringify({ type: 'done', done: !done }) });
-                    assert.equal(denied.status, 409);
-                    assert.deepEqual(await denied.json(), { error: 'Draft is paused' });
+                    await assert.rejects(() => act({ type: 'done', done: !done }, token),
+                        (error: unknown) => error instanceof RuleError && error.status === 409
+                            && error.message === 'Draft is paused');
                     const after = await getState(token);
                     assert.equal(after.managers[0].done, done);
                     assert.equal(after.draft.remainingMs, before.draft.remainingMs);
-                    return { status: denied.status, done: after.managers[0].done,
+                    return { status: 409, done: after.managers[0].done,
                         remainingMsBefore: before.draft.remainingMs, remainingMsAfter: after.draft.remainingMs };
                 });
                 await browser('find', 'role', 'button', 'click', '--name', 'Resume', '--exact');
@@ -185,9 +170,10 @@ async function main() {
         }
     } finally {
         if (!closedBrowser) await browser('close').catch(() => {});
+        const logged = await events();
         await dropIsolated(schema);
         await writeFile(`${dir}/results.json`, JSON.stringify(results, null, 2));
-        await writeFile(`${dir}/actions.json`, JSON.stringify(actions, null, 2));
+        await writeFile(`${dir}/actions.json`, JSON.stringify(logged, null, 2));
     }
     assert(results.every(result => result.result === 'passed'), 'Nomination preference regressions must pass');
 }

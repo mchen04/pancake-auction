@@ -1,18 +1,23 @@
 import { evidenceDirectory } from "./evidence";
 import { mkdir } from "node:fs/promises";
-import { begin, closeDatabase } from "../lib/db";
+import { runAdmin } from "./admin-client";
+import { readFile } from "node:fs/promises";
 import { buildPool, sourceUrls } from "../lib/import-data";
 import { readSnapshot, writeSnapshot, type Snapshot } from "../lib/import-cache";
-import { loadEnvironment, safeError } from "./env";
+import { safeError } from "./env";
 async function main() {
-    loadEnvironment();
     const apply = process.argv.includes("--apply");
     console.log("Sleeper requests the players endpoint at most once per day. Reuse the evidence snapshot within 24 hours.");
     const startedAt = new Date();
     const evidence = evidenceDirectory(process.env.EVIDENCE_DIR);
     const snapshot = evidence ? `${evidence}/import/sleeper-2026.json` : null;
     if (evidence) await mkdir(`${evidence}/import`, { recursive: true });
-    const cached = snapshot ? await readSnapshot(snapshot) : null;
+    const option = process.argv.indexOf('--snapshot');
+    const explicit = option >= 0 ? JSON.parse(await readFile(process.argv[option + 1], 'utf8')) as Snapshot : null;
+    if (explicit && (!Number.isFinite(Date.parse(explicit.fetchedAt)) || !Array.isArray(explicit.data))) {
+        throw new Error('Invalid recorded snapshot');
+    }
+    const cached = explicit ?? (snapshot ? await readSnapshot(snapshot) : null);
     const raw: unknown[] = cached && Array.isArray(cached.data) ? cached.data : [];
     const fetchedTimes: number[] = [];
     if (!raw.length) {
@@ -53,37 +58,12 @@ async function main() {
         console.log("Dry run: no database writes.");
         return;
     }
-    const client = await begin();
-    try {
-        await client.query("SELECT id FROM draft WHERE id=1 FOR UPDATE");
-        if ((await client.query("SELECT status FROM draft")).rows[0].status !== "setup" || (await client.query(
-            "SELECT 1 FROM lots LIMIT 1")).rowCount) {
-            throw new Error("Import is forbidden once the draft starts; there is no override");
-        }
-        const ids = result.players.map(p => p.id);
-        await client.query("DELETE FROM players WHERE NOT (id = ANY($1::text[]))", [ids]);
-        await client.query(`
-    INSERT INTO players(id,data) SELECT item->>'id',item FROM jsonb_array_elements($1::jsonb)
-    item ON CONFLICT(id) DO UPDATE SET data=EXCLUDED.data
-`, [JSON.stringify(result.players)]);
-        await client.query("INSERT INTO import_runs(started_at,sources,counts,coverage) VALUES($1,$2,$3,$4)", [
-            startedAt,
-            JSON.stringify(sourceUrls),
-            result.counts,
-            result.coverage
-        ]);
-        await client.query("COMMIT");
-        console.log(`Imported ${ids.length} players.`);
-    }
-    catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-    }
-    finally {
-        client.release();
-    }
+    const fetchedAt = cached?.fetchedAt ?? new Date(Math.min(...fetchedTimes)).toISOString();
+    await runAdmin('admin:importPlayers', { players: result.players, fetchedAt,
+        startedAt: startedAt.getTime(), sources: sourceUrls, counts: result.counts, coverage: result.coverage });
+    console.log(`Imported ${result.players.length} players.`);
 }
 main().catch(error => {
     console.error(safeError(error));
     process.exitCode = 1;
-}).finally(closeDatabase);
+});
