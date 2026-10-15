@@ -651,6 +651,7 @@ export function RosterPanel(props: RoomProps) {
   const taxi = entries.filter(entry => entry.placement === 'taxi');
   const ir = entries.filter(entry => entry.placement === 'ir');
   const c = counts(entries);
+  const pauseReason = state.draft.status === 'paused' ? 'Available when the draft resumes' : undefined;
   const activePlayers = active.map(entry => findPlayer(state, entry.playerId));
   const assignment = activePlayers.every(player => player !== undefined)
     ? matching(activePlayers) ?? Array<number>(slots.length).fill(-1) : Array<number>(slots.length).fill(-1);
@@ -691,8 +692,12 @@ export function RosterPanel(props: RoomProps) {
         {(me.done || (onlyReserveOpen(entries) && me.budget >= 1)) && state.draft.status !== 'complete'
           && state.draft.status !== 'setup' && (
           <div className="skip-note">
-            <p>{me.done ? 'You are skipping your nominations.' : 'Only taxi and IR spots are left.'} You can still bid.</p>
-            <button className="ghost small" disabled={props.busy}
+            <p>
+              {me.done ? 'You are skipping your nominations.' : 'Only taxi and IR spots are left.'} You can still bid.
+              {pauseReason && <span id={`nomination-pause-${me.id}`}> {pauseReason}.</span>}
+            </p>
+            <button className="ghost small" disabled={props.busy || state.draft.status !== 'running'}
+              title={pauseReason} aria-describedby={pauseReason ? `nomination-pause-${me.id}` : undefined}
               onClick={() => void props.send({ type: 'done', done: !me.done })}>
               {me.done ? 'Nominate again' : 'Skip my nominations'}
             </button>

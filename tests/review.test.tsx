@@ -87,4 +87,37 @@ describe('review component regressions', () => {
         state.managers[1].done = true;
         expect(turnsUntil(state, state.managers[1])).toBeNull();
     });
+    it.each((['paused', 'running', 'setup', 'complete'] as const)
+        .flatMap(status => [false, true].map(done => ({ status, done }))))(
+        'C18 nomination preference is correct for $status with Done $done', ({ status, done }) => {
+            const state = roomFixture();
+            state.draft.status = status;
+            state.managers[0].done = done;
+            state.managers[0].budget = 980;
+            state.roster = state.players.slice(0, 20).map((player, index) => ({
+                playerId: player.id, managerId: 1, placement: 'active', price: 1, lotId: index + 1
+            }));
+            const html = renderToString(createElement(RosterPanel, {
+                state, me: state.managers[0], busy: false, connected: true, send: async () => {}
+            }));
+            const button = html.match(/<button[^>]*>(?:Skip my nominations|Nominate again)<\/button>/)?.[0];
+            if (status === 'setup' || status === 'complete') {
+                expect(button).toBeUndefined();
+                return;
+            }
+            expect(button).toContain(done ? 'Nominate again' : 'Skip my nominations');
+            if (status === 'paused') {
+                expect.soft(button).toContain('disabled=""');
+                expect.soft(button).toContain('title="Available when the draft resumes"');
+                const reasonId = button?.match(/aria-describedby="([^"]+)"/)?.[1];
+                expect.soft(reasonId).toBeTruthy();
+                expect(html.replace(/<!--.*?-->/g, ''))
+                    .toContain(`id="${reasonId}"> Available when the draft resumes.</span>`);
+            } else {
+                expect(button).not.toContain('disabled');
+                expect(button).not.toContain('aria-describedby');
+            }
+        }
+    );
+
 });

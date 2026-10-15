@@ -17,7 +17,7 @@
     "sim": "tsx scripts/sim.ts",
     "verify": "tsx scripts/verify.ts",
     "league:check": "tsx scripts/cli.ts check",
-    "test:ui": "tsx tests/ui.ts",
+    "test:ui": "tsx tests/ui.ts && tsx tests/preference.ts",
     "test:volume": "tsx tests/pool-volume.ts",
     "test:room": "tsx tests/ui-import.ts",
     "test:layout": "tsx tests/layout.ts"
