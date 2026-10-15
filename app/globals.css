@@ -308,6 +308,15 @@ input {
 .nominating .pool-grid {
   grid-template-columns: minmax(0, 1fr) 62px 30px 40px 40px 36px 74px;
 }
+.blocked {
+  display: block;
+  text-align: center;
+  color: var(--muted);
+  font-size: 11px;
+}
+.roster-row.fresh {
+  background: var(--lead-tint);
+}
 .nominate {
   width: 100%;
   padding: 3px 0;
@@ -652,10 +661,6 @@ input {
   font-weight: 600;
   color: var(--muted);
 }
-.bid-note.leading {
-  color: var(--lead);
-  font-weight: 600;
-}
 
 .team-grid {
   display: grid;
@@ -666,6 +671,17 @@ input {
 }
 .team-grid.with-admin {
   grid-template-columns: minmax(0, 1fr) 52px 52px 50px 38px 30px 62px;
+}
+.team-grid.with-turn {
+  grid-template-columns: minmax(0, 1fr) 52px 52px 50px 38px 30px 38px;
+}
+.team-grid.with-turn.with-admin {
+  grid-template-columns: minmax(0, 1fr) 52px 52px 50px 38px 30px 38px 62px;
+}
+.team-grid.with-admin .team-name {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
 }
 .release {
   width: 100%;
@@ -678,7 +694,7 @@ input {
   border-color: var(--red);
   color: #fff;
 }
-.team-grid > :nth-child(n+2):nth-child(-n+6) {
+.team-grid > :nth-child(n+2):nth-child(-n+7) {
   text-align: right;
 }
 .table-head.team-grid {
@@ -1064,11 +1080,6 @@ input {
   .room[data-tab="teams"] .pool {
     display: none;
   }
-  .team-grid.with-admin .team-name {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0;
-  }
   .room[data-tab="players"] .pool,
   .room[data-tab="teams"] .teams,
   .room[data-tab="roster"] .roster,
@@ -1114,11 +1125,20 @@ input {
     display: none;
   }
   .team-grid {
-    grid-template-columns: minmax(0, 1fr) 48px 48px 44px 34px 28px;
+    grid-template-columns: minmax(0, 1fr) 46px 46px 42px 32px 26px;
+    column-gap: 5px;
+  }
+  .team-grid.with-turn {
+    grid-template-columns: minmax(0, 1fr) 46px 46px 42px 32px 26px 34px;
   }
   .team-grid.with-admin {
     grid-template-columns: minmax(0, 1fr) 44px 44px 40px 30px 26px 60px;
-    column-gap: 5px;
+  }
+  .team-grid.with-turn.with-admin {
+    grid-template-columns: minmax(0, 1fr) 44px 44px 40px 30px 26px 0 60px;
+  }
+  .team-grid.with-turn.with-admin > :nth-child(7) {
+    visibility: hidden;
   }
   .team-row.with-admin {
     min-height: 44px;
