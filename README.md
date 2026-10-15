@@ -31,7 +31,22 @@ EVIDENCE_DIR=/absolute/path/outside/repo npm run sim -- --runs 1 --timing real -
 
 `verify` runs typecheck, lint, unit tests, database tests, production build, three fast full drafts, and one real-timing full draft. It records each exit code and log path. Simulations build and start the production app on a free port. They copy the live imported pool into fresh `sim_*` schemas. Without an import, they label the synthetic fallback. Ten independent HTTP clients claim ten seats and poll concurrently. A separate process restores a saved seat token during each run. The event replay checker independently recomputes budgets, matching, eligibility, bidding, timers, sales, placement moves, and turn rotation.
 
-Tests use `test_*` schemas and recorded import fixtures. They never call Sleeper. Both tools drop their own schemas, even on failure. `--keep-schema` preserves a schema for inspection. Fast timing uses 10/5/5/15 seconds; the shorter opening bid window speeds timeout scenarios. Real timing uses 10/10/5/15 seconds. Database tests exercise real nomination and bid expiry. Synthetic fixture setup uses longer clocks for unrelated races.
+Tests use `test_*` schemas and recorded import fixtures. They never call Sleeper. Both tools drop their own schemas, even on failure. `--keep-schema` preserves a schema for inspection. Fast timing uses 3/3/1.5/4.5 seconds and 150 ms polling. Real runs retain 500 ms polling. Real timing uses 10/10/5/15 seconds. Database tests exercise real nomination and bid expiry. Synthetic fixture setup uses longer clocks for unrelated races.
+
+## Local verification
+
+Set `PANCAKE_AUCTION_ENV_FILE` to an authorized local environment file containing `DATABASE_URL` and `DATABASE_URL_POOLED`.
+Use a disposable local PostgreSQL database with an already migrated and imported `auction` schema.
+Set `EVIDENCE_DIR` outside the repository, then run `npm run verify`.
+Verification reads the source pool and creates isolated `test_*` and `sim_*` schemas, which it drops afterward.
+It leaves the source schema unchanged. No remote credentials or network import are needed.
+
+Bots draw player valuations from the seed, projection, dynasty ADP, manager bias, noise, and positional need.
+Their concurrent polling loops raise with mixed increments, snipe, bid maximums, pass, or await expiry.
+Every full run requires 400 accepted bids, 25 expiry sales, three nomination timeouts, five exact-maximum bids,
+and an average unspent budget below $150. Each team must fill all twenty active places.
+The independent replay recomputes every bid maximum and all fifteen prior invariants.
+Run summaries include counts and the spread across seeds. Verification rejects identical bid or expiry counts across seeds.
 
 ## Auction rules
 

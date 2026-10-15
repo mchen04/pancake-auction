@@ -7,9 +7,11 @@ import { Client } from "pg";
 import { loadEnvironment, safeError } from "./env";
 import { auditDraft } from "./audit";
 import { Bot } from "./bot";
+import { Competition } from "./competition";
+import { assertFloors, recordSpread } from "./simulation-results";
 import { createIsolated, dropIsolated, seedManagers, seedPlayers, sleep, sql, syntheticPool } from "../tests/support";
 import { schemaName } from "../lib/db";
-import { counts, legalPlacements, maxBid, taxiEligibility } from "../lib/rules";
+import { counts, maxBid, taxiEligibility } from "../lib/rules";
 import type { AuctionState, Player } from "../lib/types";
 function option(name: string, fallback: string) {
     const index = process.argv.indexOf(name);
@@ -89,6 +91,7 @@ class DraftDriver {
     reconnects = 0;
     simultaneousBids = 0;
     snipes = 0;
+    competition: Competition | undefined;
     private lastReport = 0;
     private midDone = new Set<string>();
     private midAt = {
@@ -225,7 +228,7 @@ class DraftDriver {
         await this.bot(3 + Math.floor(random() * 8)).reconnect();
         this.reconnects++;
         state = await this.state();
-        await sleep(Math.max(0, state.draft.deadline! - state.serverNow - 2000));
+        await sleep(Math.max(0, state.draft.deadline! - state.serverNow - state.draft.biddingMs * 0.2));
         state = await this.state();
         await this.bot(1).action({
             type: "bid",
@@ -315,75 +318,31 @@ class DraftDriver {
         return true;
     }
     async fillActive() {
-        let rounds = 0;
+        const initial = await this.state();
+        const competition = new Competition(this.bots, seed, initial.players, this.reserved);
+        this.competition = competition;
+        competition.start();
         const started = Date.now();
-        while (true) {
-            let state = await this.state();
-            if (state.roster.filter(e => e.placement === "active").length === 200) {
-                return;
-            }
-            assert.equal(state.draft.status, "running");
-            assert(Date.now() - started < 40 * 60 * 1000, "Active draft must finish within forty minutes");
-            if (state.lot) {
-                await this.finishByPasses(state);
-                continue;
-            }
-            const nominator = state.draft.nominatorId!;
-            const entries = state.roster.filter(e => e.managerId === nominator);
-            if (counts(entries).active === 20) {
-                if (nominator === 1) {
-                    await this.bot(nominator).action({
-                        type: "done",
-                        done: true
-                    });
+        try {
+            while (true) {
+                const state = await this.state();
+                const active = state.roster.filter(entry => entry.placement === "active").length;
+                if (active === 200) return;
+                assert.equal(state.draft.status, "running");
+                assert(Date.now() - started < 30 * 60 * 1000, "Competitive draft must finish within thirty minutes");
+                const due = Object.entries(this.midAt).some(([name, threshold]) =>
+                    active >= threshold && !this.midDone.has(name) && (name !== "force" || state.lot));
+                if (due) {
+                    await competition.suspend();
+                    await this.midDraft(await this.state());
+                    competition.enabled = true;
                 }
-                else {
-                    while ((await this.state()).draft.nominatorId === nominator)
-                        await sleep(200);
-                }
-                continue;
+                await sleep(state.draft.biddingMs < 10000 ? 75 : 200);
             }
-            const manager = state.managers.find(m => m.id === nominator)!;
-            const player = this.available(state, nominator).find(p => !this.reserved.some(reserved =>
-                reserved.id === p.id) && legalPlacements(p, entries, state.players).includes("active"));
-            assert(player);
-            state = await this.nominate(player);
-            if (!await this.midDraft(state)) {
-                continue;
-            }
-            state = await this.state();
-            if (!state.lot) {
-                continue;
-            }
-            const lot = state.lot;
-            if (rounds < 5) {
-                const bidders = state.managers.filter(m => maxBid(m.budget, player, state.roster.filter(e =>
-                    e.managerId === m.id), state.players) > lot.highBid);
-                const bidder = bidders[Math.floor(random() * bidders.length)];
-                assert(bidder);
-                await this.bot(bidder.id).action({
-                    type: "bid",
-                    lotId: lot.id,
-                    amount: 2 + Math.floor(random() * 15)
-                });
-            }
-            else {
-                const candidates = state.managers.filter(m => m.id > 2).map(m => ({
-                    manager: m,
-                    max: maxBid(m.budget, player, state.roster.filter(e => e.managerId === m.id), state.players)
-                })).sort((a, b) => b.max - a.max);
-                if (candidates[0].max > lot.highBid) {
-                    await this.bot(candidates[0].manager.id).action({
-                        type: "bid",
-                        lotId: lot.id,
-                        amount: candidates[0].max
-                    });
-                }
-            }
-            state = await this.state();
-            await this.finishByPasses(state);
-            rounds++;
-            assert(manager.budget >= 1);
+        } finally {
+            await competition.suspend();
+            this.bots.forEach(bot => { bot.onPoll = undefined; });
+            this.snipes += competition.snipes;
         }
     }
     async lateAuctions() {
@@ -485,7 +444,7 @@ async function runDraft(run: number, pool: Player[], source: string, evidence: s
         await seedPlayers(pool);
         await seedManagers();
         if (timing === "fast") {
-            await sql("UPDATE draft SET nomination_ms=10000,bidding_ms=5000,extension_ms=5000,cap_ms=15000");
+            await sql("UPDATE draft SET nomination_ms=3000,bidding_ms=3000,extension_ms=1500,cap_ms=4500");
         }
         const port = await freePort();
         const base = `http://127.0.0.1:${port}`;
@@ -529,7 +488,7 @@ async function runDraft(run: number, pool: Player[], source: string, evidence: s
             length: 10
         }, (_, index) => new Bot(index + 1, base));
         await Promise.all(bots.map(bot => bot.claim()));
-        bots.forEach(bot => bot.startPolling());
+        bots.forEach(bot => bot.startPolling(timing === "fast" ? 150 : 500));
         const driver = new DraftDriver(bots, reservedEndgamePlayers(pool));
         await driver.timerPrelude();
         await driver.commissionerPrelude();
@@ -539,6 +498,7 @@ async function runDraft(run: number, pool: Player[], source: string, evidence: s
         await Promise.all(bots.map(bot => bot.stopPolling()));
         const audited = await auditDraft();
         result.audited = audited;
+        assertFloors(audited);
         assert(audited.timers.nominationTimeouts > 0 && audited.timers.extensions > 0,
             "Nomination timeout and accepted extensions must execute");
         assert(audited.timers.caps > 0 && audited.timers.expirySales > 0,
@@ -549,6 +509,9 @@ async function runDraft(run: number, pool: Player[], source: string, evidence: s
         assert(driver.reconnects > 0 && driver.snipes > 0 && driver.simultaneousBids >= 10);
         result.result = {
             ...audited,
+            competitiveProfiles: driver.competition!.profiles(),
+            competitiveNominations: driver.competition!.nominations,
+            competitiveSnipes: driver.competition!.snipes,
             reconnects: driver.reconnects,
             snipes: driver.snipes,
             simultaneousBids: driver.simultaneousBids,
@@ -617,6 +580,7 @@ async function main() {
     if (runs === 1) {
         const run = Number(option('--run-index', '1'));
         await runDraft(run, players, source, evidence);
+        await recordSpread([`${evidence}/sim/run-${timing}-${seed}-${run}.json`]);
     } else {
         for (let first = 1; first <= runs; first += 3) {
             const group = Array.from({ length: Math.min(3, runs - first + 1) }, (_, index) => first + index);
@@ -624,6 +588,9 @@ async function main() {
             const failure = results.find(result => result.status === 'rejected');
             if (failure?.status === 'rejected') throw failure.reason;
         }
+        const paths = Array.from({ length: runs }, (_, index) =>
+            `${evidence}/sim/run-${timing}-${seed + index}-${index + 1}.json`);
+        await recordSpread(paths, true);
     }
 }
 main().catch(error => {

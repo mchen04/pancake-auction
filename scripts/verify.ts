@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { loadEnvironment, safeError } from "./env";
+import { recordSpread } from "./simulation-results";
 async function main() {
+    const started = Date.now();
     loadEnvironment();
     const root = process.env.EVIDENCE_DIR;
     if (!root || resolve(root).startsWith(resolve(".") + "/")) {
@@ -77,6 +79,10 @@ async function main() {
             throw new Error(`Verification failed; see ${path}`);
         }
     }
+    const summaries = (await readdir(`${dir}/sim`)).filter(file => /^run-.*\.json$/.test(file));
+    const spread = await recordSpread(summaries.map(file => `${dir}/sim/${file}`), true);
+    await writeFile(`${dir}/seed-spread.json`, JSON.stringify(spread, null, 2));
+    await writeFile(`${dir}/duration.json`, JSON.stringify({ elapsedMs: Date.now() - started }, null, 2));
     console.log(`All checks passed. Results: ${dir}/results.json`);
 }
 main().catch(error => {

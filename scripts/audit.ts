@@ -23,7 +23,7 @@ type Timing = {
     extensionMs: number;
     capMs: number;
 };
-class Replay {
+export class Replay {
     roster: Entry[] = [];
     budgets = new Map<number, number>();
     done = new Set<number>();
@@ -62,6 +62,9 @@ class Replay {
         irSales: 0
     };
     implicitGiveUps = 0;
+    acceptedBids = 0;
+    maxBidHits = 0;
+    bidParticipation = new Map<number, { acceptedBids: number; lots: Set<number> }>();
     lookup: Map<string, Player>;
     slotTypes = [
         "PG",
@@ -223,7 +226,14 @@ class Replay {
                 assert(!this.paused && now < this.deadline! && !lot.passes.has(id));
                 const amount = Number(data.amount);
                 assert(Number.isInteger(amount) && amount > lot.high);
-                assert(amount <= this.maximum(id, this.player(lot.playerId)));
+                const maximum = this.maximum(id, this.player(lot.playerId));
+                assert(amount <= maximum, `Bid ${event.id} exceeds independently recomputed maximum ${maximum}`);
+                this.acceptedBids++;
+                if (amount === maximum) this.maxBidHits++;
+                const participation = this.bidParticipation.get(id) ?? { acceptedBids: 0, lots: new Set<number>() };
+                participation.acceptedBids++;
+                participation.lots.add(lot.id);
+                this.bidParticipation.set(id, participation);
                 assert.equal(data.beforeDeadline, this.deadline);
                 const extended = this.deadline! + this.timing.extensionMs;
                 const cap = now + this.timing.capMs;
@@ -448,6 +458,14 @@ export async function auditDraft(requireFull = true) {
         undos: replay.coverage.undo || 0,
         forceEnds: replay.coverage.force || 0,
         pauses: replay.coverage.pause || 0,
+        acceptedBids: replay.acceptedBids,
+        maxBidHits: replay.maxBidHits,
+        bidParticipation: managers.map(manager => ({
+            managerId: manager.id,
+            acceptedBids: replay.bidParticipation.get(manager.id)?.acceptedBids ?? 0,
+            lotsBidOn: replay.bidParticipation.get(manager.id)?.lots.size ?? 0
+        })),
+        averageUnspentBudget: teams.reduce((sum, team) => sum + team.budget, 0) / teams.length,
         invariants: {
             uniqueLiveSales: true,
             budgetReplay: true,
@@ -463,7 +481,8 @@ export async function auditDraft(requireFull = true) {
             pauseExactRemaining: true,
             forceEndHighBid: true,
             databaseMatchesReplay: true,
-            fullActiveRosters: requireFull
+            fullActiveRosters: requireFull,
+            noBidExceededIndependentMax: true
         }
     };
 }

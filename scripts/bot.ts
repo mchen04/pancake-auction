@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import type { Action, AuctionState, Player } from "../lib/types";
+const raceReasons = new Set([
+    'Draft is paused', 'Draft is not in progress', 'It is not your nomination turn',
+    'Player is no longer available', 'This lot has ended. Refresh and try the current lot.',
+    'Bid arrived after the deadline', 'The high bidder cannot give up', 'You already gave up on this player'
+]);
 export class Bot {
     cookie = "";
     token = "";
@@ -11,6 +16,7 @@ export class Bot {
     private timer: ReturnType<typeof setInterval> | undefined;
     private polling: Promise<void> | null = null;
     failure: Error | null = null;
+    onPoll: ((state: AuctionState) => Promise<void>) | undefined;
     constructor(public id: number, private base: string) {
     }
     async call(path: string, body?: unknown, expectedRejection = false) {
@@ -29,7 +35,8 @@ export class Bot {
         if (!response.ok) {
             const reason = String(result.error).replace(/\$\d+/g, "$N");
             this.rejected[`${response.status}: ${reason}`] = (this.rejected[`${response.status}: ${reason}`] || 0) + 1;
-            if (!expectedRejection || ![409, 422].includes(response.status)) {
+            const race = raceReasons.has(String(result.error)) || /^Bid must be a whole dollar above/.test(result.error);
+            if (!expectedRejection || ![409, 422].includes(response.status) || !race) {
                 throw new Error(`Unexpected HTTP ${response.status}: ${result.error}`);
             }
             return null;
@@ -64,18 +71,22 @@ export class Bot {
         await this.state();
         return result !== null;
     }
-    startPolling() {
+    startPolling(intervalMs = 500) {
         this.timer = setInterval(() => {
             if (this.polling) {
                 return;
             }
-            this.polling = this.state().then(() => {
+            this.polling = this.state().then(async state => {
+                await this.onPoll?.(state);
             }).catch(error => {
                 this.failure = error;
             }).finally(() => {
                 this.polling = null;
             });
-        }, 500);
+        }, intervalMs);
+    }
+    async waitForPoll() {
+        await this.polling;
     }
     async stopPolling() {
         clearInterval(this.timer);
