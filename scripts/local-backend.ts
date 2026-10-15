@@ -4,7 +4,7 @@ import { createConnection, createServer } from 'node:net';
 import { resolve } from 'node:path';
 import { ConvexHttpClient } from 'convex/browser';
 import { makeFunctionReference } from 'convex/server';
-import { evidenceDirectory } from './evidence';
+import { evidenceDirectory, repositoryDirectory } from './evidence';
 
 export const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 async function cacheLock(cache: string) {
@@ -70,23 +70,23 @@ async function startBackend(label: string, fixtures: boolean, directory: string,
     const port = await freePort();
     const sitePort = await freePort();
     for (const name of ['convex', 'lib', 'league']) {
-        await cp(resolve(name), `${directory}/${name}`, { recursive: true });
+        await cp(resolve(repositoryDirectory, name), `${directory}/${name}`, { recursive: true });
     }
-    if (fixtures) await cp('tests/fixture-functions.ts', `${directory}/convex/testOnly.ts`);
-    await cp('package.json', `${directory}/package.json`);
-    await symlink(resolve('node_modules'), `${directory}/node_modules`, 'dir');
+    if (fixtures) await cp(resolve(repositoryDirectory, 'tests/fixture-functions.ts'), `${directory}/convex/testOnly.ts`);
+    await cp(resolve(repositoryDirectory, 'package.json'), `${directory}/package.json`);
+    await symlink(resolve(repositoryDirectory, 'node_modules'), `${directory}/node_modules`, 'dir');
     await writeFile(`${directory}/convex.json`, JSON.stringify({ functions: 'convex/' }));
     const environment: NodeJS.ProcessEnv = { PATH: process.env.PATH, NODE_ENV: 'test', CONVEX_AGENT_MODE: 'anonymous',
         AUCTION_CLI_HOME: `${directory}/cli-home`, CONVEX_DISABLE_TELEMETRY: '1', TMPDIR: `${directory}/tmp` };
     await mkdir(`${directory}/cli-home`, { recursive: true });
     await mkdir(`${directory}/tmp`);
     await mkdir(`${directory}/cli-home/.cache`);
-    const cache = resolve('.convex/backend-binary-cache');
+    const cache = resolve(repositoryDirectory, '.convex/backend-binary-cache');
     await mkdir(cache, { recursive: true });
     await symlink(cache, `${directory}/cli-home/.cache/convex`, 'dir');
     const releaseCache = await cacheLock(cache);
-    const cli = resolve('node_modules/convex/bin/main.js');
-    const preload = resolve('scripts/local-cli.mjs');
+    const cli = resolve(repositoryDirectory, 'node_modules/convex/bin/main.js');
+    const preload = resolve(repositoryDirectory, 'scripts/local-cli.mjs');
     const child = spawn(process.execPath, ['--import', preload, cli, 'dev', '--typecheck', 'disable',
         '--codegen', 'disable', '--local-cloud-port', String(port), '--local-site-port', String(sitePort),
         '--tail-logs', 'disable'], { cwd: directory, env: environment, stdio: ['ignore', 'pipe', 'pipe'] });

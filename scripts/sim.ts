@@ -1,4 +1,4 @@
-import { evidenceDirectory } from "./evidence";
+import { evidenceDirectory, repositoryDirectory } from "./evidence";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -484,6 +484,7 @@ async function main() {
     assert(Number.isInteger(runs) && runs > 0 && Number.isFinite(seed));
     assert(["fast", "real"].includes(timing));
     const evidence = evidenceDirectory(process.env.EVIDENCE_DIR, true)!;
+    process.chdir(repositoryDirectory);
     await mkdir(`${evidence}/sim`, {
         recursive: true
     });

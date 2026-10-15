@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { runAdmin } from './admin-client';
 import { checkLeague } from './readiness';
 import { safeError } from './env';
+import { repositoryDirectory } from './evidence';
 async function main() {
     const [command, ...args] = process.argv.slice(2);
     if (command === 'managers') console.log(JSON.stringify(await runAdmin('admin:managers')));
@@ -14,8 +15,8 @@ async function main() {
         console.log(JSON.stringify(result, null, 2));
         if (!result.ready) process.exitCode = 1;
     } else if (command === 'dev' || command === 'start') {
-        const child = spawn(process.execPath, ['node_modules/next/dist/bin/next', command, ...args],
-            { stdio: 'inherit', env: process.env });
+        const child = spawn(process.execPath, [`${repositoryDirectory}/node_modules/next/dist/bin/next`, command, ...args],
+            { cwd: repositoryDirectory, stdio: 'inherit', env: process.env });
         process.once('SIGTERM', () => child.kill('SIGTERM'));
         process.once('SIGINT', () => child.kill('SIGINT'));
         process.exitCode = await new Promise<number>(resolve => child.once('exit', code => resolve(code ?? 1)));

@@ -19,25 +19,28 @@ describe('C14 evidence stays outside the repository', () => {
         'rejects repository equality and descendants: %s', async value => {
             await mkdir(root, { recursive: true });
             const parent = await mkdtemp(`${root}/case-`);
-            const cwd = `${parent}/source`;
-            await mkdir(cwd);
-            const evidence = value === 'absolute-root' ? cwd : value === 'external' ? `${parent}/outside` : value;
-            const fetchLog = `${parent}/fetch.jsonl`;
-            const result = spawnSync(process.execPath, [
-                '--import', resolve('node_modules/tsx/dist/loader.mjs'),
-                '--import', resolve('tests/import-fetch.mjs'), resolve('scripts/import.ts')
-            ], { cwd, encoding: 'utf8', timeout: 15000, env: {
-                ...process.env, EVIDENCE_DIR: evidence, IMPORT_TEST_FETCH_LOG: fetchLog,
-                IMPORT_TEST_NOW: String(Date.UTC(2026, 9, 1))
-            } });
-            const fetches = (await readFile(fetchLog, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean);
-            if (value === 'external') {
-                expect(result.status).toBe(0);
-                expect(fetches).toHaveLength(15);
-            } else {
-                expect.soft(result.status).toBe(1);
-                expect.soft(result.stderr).toContain('EVIDENCE_DIR must be outside the repository');
-                expect(fetches).toHaveLength(0);
+            try {
+                const cwd = await privateSource(parent);
+                const evidence = value === 'absolute-root' ? cwd : value === 'external' ? `${parent}/outside` : value;
+                const fetchLog = `${parent}/fetch.jsonl`;
+                const result = spawnSync(process.execPath, [
+                    '--import', `${cwd}/node_modules/tsx/dist/loader.mjs`,
+                    '--import', `${cwd}/tests/import-fetch.mjs`, `${cwd}/scripts/import.ts`
+                ], { cwd, encoding: 'utf8', timeout: 15000, env: {
+                    ...process.env, EVIDENCE_DIR: evidence, IMPORT_TEST_FETCH_LOG: fetchLog,
+                    IMPORT_TEST_NOW: String(Date.UTC(2026, 9, 1))
+                } });
+                const fetches = (await readFile(fetchLog, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean);
+                if (value === 'external') {
+                    expect(result.status).toBe(0);
+                    expect(fetches).toHaveLength(15);
+                } else {
+                    expect.soft(result.status).toBe(1);
+                    expect.soft(result.stderr).toContain('EVIDENCE_DIR must be outside the repository');
+                    expect(fetches).toHaveLength(0);
+                }
+            } finally {
+                await rm(parent, { recursive: true, force: true });
             }
         }, 20000
     );
@@ -126,12 +129,70 @@ describe('C14 physical evidence containment', () => {
         await mkdir(root, { recursive: true });
         const parent = await mkdtemp(`${root}/repository-link-`);
         try {
-            await mkdir(`${parent}/source`);
-            await symlink(`${parent}/source`, `${parent}/repository-alias`, 'dir');
-            expect(() => evidenceDirectory(`${parent}/source`, false, `${parent}/repository-alias`))
-                .toThrow('EVIDENCE_DIR must be outside');
+            const source = await privateSource(parent);
+            await symlink(source, `${parent}/repository-alias`, 'dir');
+            const before = await fileCount(source);
+            const fetchLog = `${parent}/fetch.jsonl`;
+            const result = spawnSync(process.execPath, [
+                '--import', `${source}/node_modules/tsx/dist/loader.mjs`,
+                '--import', `${source}/tests/import-fetch.mjs`, `${parent}/repository-alias/scripts/import.ts`
+            ], { cwd: parent, encoding: 'utf8', timeout: 15000, env: {
+                PATH: process.env.PATH, NODE_ENV: 'test', EVIDENCE_DIR: source,
+                IMPORT_TEST_FETCH_LOG: fetchLog, IMPORT_TEST_NOW: String(Date.UTC(2026, 9, 1))
+            } });
+            expect(result.status).toBe(1);
+            expect(result.stderr).toContain('EVIDENCE_DIR must be outside');
+            expect(await fileCount(source)).toBe(before);
+            expect(await readFile(fetchLog, 'utf8').catch(() => '')).toBe('');
         } finally {
             await rm(parent, { recursive: true, force: true });
         }
     });
+});
+
+describe('C23 source boundary ignores the caller working directory', () => {
+    it.each(['source-cwd', 'sibling-cwd', 'external-from-sibling'])(
+        'actual absolute importer invocation: %s', async kind => {
+            await mkdir(root, { recursive: true });
+            const parent = await mkdtemp(`${root}/cwd-`);
+            const proof: Record<string, unknown> = { kind };
+            try {
+                const source = await privateSource(parent);
+                const sibling = `${parent}/sibling`;
+                await mkdir(sibling);
+                const cwd = kind === 'source-cwd' ? source : sibling;
+                const target = kind === 'external-from-sibling' ? `${parent}/external/new` : `${source}/evidence`;
+                const before = await fileCount(source);
+                const fetchLog = `${parent}/fetch.jsonl`;
+                const result = spawnSync(process.execPath, [
+                    '--import', `${source}/node_modules/tsx/dist/loader.mjs`,
+                    '--import', `${source}/tests/import-fetch.mjs`, `${source}/scripts/import.ts`
+                ], { cwd, encoding: 'utf8', timeout: 15000, env: {
+                    PATH: process.env.PATH, NODE_ENV: 'test', EVIDENCE_DIR: target,
+                    IMPORT_TEST_FETCH_LOG: fetchLog, IMPORT_TEST_NOW: String(Date.UTC(2026, 9, 1))
+                } });
+                const fetched = (await readFile(fetchLog, 'utf8').catch(() => '')).trim()
+                    .split('\n').filter(Boolean).map(line => JSON.parse(line).index);
+                const after = await fileCount(source);
+                const outputFiles = await fileCount(`${target}/import`).catch(() => 0);
+                Object.assign(proof, { cwd, target, exitCode: result.status, fetchIndexes: fetched,
+                    sourceFilesBefore: before, sourceFilesAfter: after, outputFiles });
+                expect.soft(after).toBe(before);
+                if (kind === 'external-from-sibling') {
+                    expect(result.status).toBe(0);
+                    expect(fetched).toEqual(Array.from({ length: 15 }, (_, index) => index));
+                    expect(outputFiles).toBe(16);
+                } else {
+                    expect.soft(result.status).toBe(1);
+                    expect.soft(result.stderr).toContain('EVIDENCE_DIR must be outside the repository');
+                    expect.soft(fetched).toEqual([]);
+                    expect(outputFiles).toBe(0);
+                }
+            } finally {
+                await rm(parent, { recursive: true, force: true });
+                proof.temporaryTreeRemoved = await access(parent).then(() => false, () => true);
+                await appendFile(`${root}/cwd-cases.jsonl`, JSON.stringify(proof) + '\n');
+            }
+        }, 20000
+    );
 });

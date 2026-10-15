@@ -1,4 +1,4 @@
-import { evidenceDirectory } from "./evidence";
+import { evidenceDirectory, repositoryDirectory } from "./evidence";
 import { spawn } from "node:child_process";
 import { mkdir, readdir, statfs, writeFile } from "node:fs/promises";
 import { safeError } from "./env";
@@ -6,6 +6,7 @@ import { recordSpread } from "./simulation-results";
 async function main() {
     const started = Date.now();
     const root = evidenceDirectory(process.env.EVIDENCE_DIR, true)!;
+    process.chdir(repositoryDirectory);
     const dir = `${root}/verify-${new Date().toISOString().replace(/[:.]/g, "-")}`;
     await mkdir(dir, {
         recursive: true

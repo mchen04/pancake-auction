@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { repositoryDirectory } from './evidence';
 
 export async function runAdmin(name: string, args: Record<string, unknown> = {}) {
-    const directory = resolve(process.env.CONVEX_LOCAL_DIR || '.convex/local/default');
+    const directory = resolve(repositoryDirectory, process.env.CONVEX_LOCAL_DIR || '.convex/local/default');
     const configuration = JSON.parse(await readFile(`${directory}/config.json`, 'utf8'));
     const url = `http://127.0.0.1:${configuration.ports.cloud}`;
     const privateDirectory = `${directory}/cli`;
@@ -11,8 +12,8 @@ export async function runAdmin(name: string, args: Record<string, unknown> = {})
     const path = `${privateDirectory}/args-${crypto.randomUUID()}.json`;
     await writeFile(path, JSON.stringify(args));
     try {
-        const child = spawn(process.execPath, ['--import', resolve('scripts/local-cli.mjs'),
-            resolve('node_modules/convex/bin/main.js'), 'run', '--url', url, '--admin-key', configuration.adminKey, name],
+        const child = spawn(process.execPath, ['--import', resolve(repositoryDirectory, 'scripts/local-cli.mjs'),
+            resolve(repositoryDirectory, 'node_modules/convex/bin/main.js'), 'run', '--url', url, '--admin-key', configuration.adminKey, name],
         { env: { PATH: process.env.PATH, NODE_ENV: 'test', AUCTION_CLI_HOME: privateDirectory,
             AUCTION_ARGS_FILE: path, CONVEX_AGENT_MODE: 'anonymous', CONVEX_DISABLE_TELEMETRY: '1' },
             stdio: ['ignore', 'pipe', 'pipe'] });
