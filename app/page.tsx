@@ -28,7 +28,7 @@ export default function Room() {
   const connected = connection.isWebSocketConnected;
   const [connectionTimedOut, setConnectionTimedOut] = useState(false);
   const [busy, setBusy] = useState(false);
-  const offset = useClockOffset(connected, connection.connectionCount);
+  const clock = useClockOffset(connected, connection.connectionCount);
   const [tab, setTab] = useState<Tab>('players');
   const [opening, setOpening] = useState(1);
   const [turnSeen, setTurnSeen] = useState('');
@@ -136,16 +136,21 @@ export default function Room() {
   }
   const props = { state, me, busy, connected, send };
   return (
-    <main className="room" data-tab={tab}>
+    <main className="room" data-tab={tab} data-clock-status={clock.status}>
       <header className="topbar">
         <h1 className="wordmark">Pancake Auction</h1>
         <p className={`headline ${state.draft.status}`}>{headline(state, me)}</p>
         {!connected && <p className="offline" role="status">Reconnecting…</p>}
+        {connected && (clock.status === 'syncing' || clock.status === 'retrying') && (
+          <p className="offline clock-status" role="status">
+            {clock.status === 'retrying' ? 'Clock not synced. Retrying…' : 'Syncing clock…'}
+          </p>
+        )}
         {me.commissioner && <CommissionerBar {...props} />}
         <p className="me">{me.name}</p>
       </header>
       {error && <div className="toast" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss">×</button></div>}
-      <BlockPanel {...props} offset={offset} opening={opening} setOpening={setOpening} />
+      <BlockPanel {...props} offset={clock.offset} opening={opening} setOpening={setOpening} />
       <nav className="tabbar" role="tablist">
         {tabs.map(([value, label]) => (
           <button key={value} role="tab" aria-selected={tab === value} onClick={() => setTab(value)}>{label}</button>

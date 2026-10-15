@@ -147,12 +147,14 @@ export function PlayerLine({ player }: { player: Player }) {
   );
 }
 
-function remainingMs(draft: Draft, clock: number, offset: number) {
+function remainingMs(draft: Draft, clock: number, offset: number | null) {
   if (draft.status === 'paused') return draft.remainingMs ?? 0;
-  if (draft.status !== 'running' || draft.deadline === null) return null;
+  if (draft.status !== 'running' || draft.deadline === null || offset === null) return null;
   return Math.max(0, draft.deadline - clock - offset);
 }
-export function ShotClock({ draft, offset, compact = false }: { draft: Draft; offset: number; compact?: boolean }) {
+export function ShotClock({ draft, offset, compact = false }: {
+  draft: Draft; offset: number | null; compact?: boolean
+}) {
   const [clock, setClock] = useState(0);
   useEffect(() => {
     setClock(Date.now());
@@ -307,7 +309,7 @@ function bidBlocker(props: RoomProps, maximum: number, passed: boolean) {
   return '';
 }
 
-function BidControls(props: RoomProps & { player: Player | undefined; offset: number }) {
+function BidControls(props: RoomProps & { player: Player | undefined; offset: number | null }) {
   const { state, me, send, player } = props;
   const lot = state.lot!;
   const [custom, setCustom] = useState('');
@@ -467,7 +469,9 @@ function LastWin(props: RoomProps) {
   );
 }
 
-export function BlockPanel(props: RoomProps & { offset: number; opening: number; setOpening: (value: number) => void }) {
+export function BlockPanel(props: RoomProps & {
+  offset: number | null; opening: number; setOpening: (value: number) => void
+}) {
   const { state, offset } = props;
   const [detailsFor, setDetailsFor] = useState<number | null>(null);
   const lot = state.lot;
