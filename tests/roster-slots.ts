@@ -207,7 +207,92 @@ async function main() {
             'Every team name must be a real inspection button');
         await browser('focus', selector); await browser('press', key);
     }
+    async function teamGeometry(id: number) {
+        return evaluate<{
+            expanded: boolean; cueVisible: boolean; cueAngle: number; background: string;
+            columns: number[][]; header: number[][];
+        }>(`(() => {
+            const button=document.querySelector('[aria-controls="team-roster-${id}"]');
+            const row=button.closest('.team-row'),cell=button.closest('.team-name');
+            const scroll=row.closest('.scroll'),r=row.getBoundingClientRect(),s=scroll.getBoundingClientRect();
+            scroll.scrollTop+=r.top-s.top-(scroll.clientHeight-r.height)/2;
+            const cue=button.querySelector('.team-inspect-cue');
+            const c=cue?.getBoundingClientRect(),b=button.getBoundingClientRect(),v=scroll.getBoundingClientRect();
+            const style=cue&&getComputedStyle(cue),matrix=new DOMMatrix(style?.transform??'none');
+            const columns=element=>[...element.children].map(child=>{
+                const box=child.getBoundingClientRect();return [box.left,box.right];});
+            return {expanded:button.getAttribute('aria-expanded')==='true',
+                cueVisible:!!c&&c.width>0&&c.height>0&&style.visibility==='visible'&&Number(style.opacity)>0
+                    &&c.left>=b.left&&c.right<=b.right&&c.top>=v.top&&c.bottom<=v.bottom
+                    &&c.left>=0&&c.right<=innerWidth,
+                cueAngle:Math.round(Math.atan2(matrix.b,matrix.a)*180/Math.PI),
+                background:getComputedStyle(row).backgroundColor,columns:columns(row),
+                header:columns(document.querySelector('.teams .table-head'))};
+        })()`);
+    }
+    function aligned(proof: Awaited<ReturnType<typeof teamGeometry>>) {
+        assert.equal(proof.columns.length, proof.header.length);
+        proof.columns.forEach((column, index) => column.forEach((edge, side) => {
+            assert(Math.abs(edge - proof.header[index][side]) < 1, 'Team columns must align with their headers');
+        }));
+    }
     try {
+        for (const [width, height] of [[1440,900],[390,844]]) {
+            await check(`${width}x${height} team disclosure is visible without hover and follows inspection`, async () => {
+                await browser('set', 'viewport', String(width), String(height));
+                const state = await seed('partial'); await open(); await tab('Teams');
+                await browser('mouse', 'move', '0', '0');
+                const closed = [];
+                for (const manager of state.managers) {
+                    const proof = await teamGeometry(manager.id); closed.push({ manager: manager.name, ...proof });
+                    assert(proof.cueVisible, `${manager.name} must have a visible disclosure cue without hover`);
+                    assert.equal(proof.expanded, false); assert.equal(proof.cueAngle, 0); aligned(proof);
+                }
+                await browser('scroll', 'up', '2000', '--selector', '.teams .scroll');
+                await browser('screenshot', `${evidence}/${width}x${height}-disclosure-closed.png`);
+                await inspectTeam(2);
+                const opened = await teamGeometry(2);
+                assert(opened.cueVisible); assert(opened.expanded); assert.equal(opened.cueAngle, 90);
+                assert.notEqual(opened.background, closed[1].background); aligned(opened);
+                await browser('screenshot', `${evidence}/${width}x${height}-disclosure-open.png`);
+                await inspectTeam(2);
+                const restored = await teamGeometry(2);
+                assert(restored.cueVisible); assert(!restored.expanded); assert.equal(restored.cueAngle, 0);
+                assert.equal(restored.background, closed[1].background); aligned(restored);
+                return { closed, opened, restored };
+            });
+            await check(`${width}x${height} team disclosure keyboard focus stays inside its clipping area`, async () => {
+                await browser('set', 'viewport', String(width), String(height));
+                await seed('partial'); await open(); await tab('Teams'); await teamGeometry(2);
+                const selector = '[aria-controls="team-roster-2"]';
+                await browser('focus', selector); await browser('press', 'Tab'); await browser('press', 'Shift+Tab');
+                const proof = await evaluate<{
+                    focused: boolean; visible: boolean; outlineWidth: number; outlineStyle: string;
+                    outlineOffset: number; ring: number[]; clips: number[][];
+                }>(`(() => {
+                    const button=document.querySelector(${JSON.stringify(selector)}),style=getComputedStyle(button);
+                    const r=button.getBoundingClientRect();
+                    const width=parseFloat(style.outlineWidth),offset=parseFloat(style.outlineOffset);
+                    const extent=width+offset,ring=[r.left-extent,r.top-extent,r.right+extent,r.bottom+extent];
+                    const box=element=>{const b=element.getBoundingClientRect();return [b.left,b.top,b.right,b.bottom];};
+                    const clips=[box(button.closest('.team-name')),box(button.closest('.scroll')),
+                        [0,0,innerWidth,innerHeight]];
+                    return {focused:document.activeElement===button&&button.matches(':focus-visible'),
+                        visible:ring[2]>ring[0]&&ring[3]>ring[1],outlineWidth:width,outlineOffset:offset,
+                        outlineStyle:style.outlineStyle,ring,clips};
+                })()`);
+                await browser('screenshot', `${evidence}/${width}x${height}-disclosure-focus.png`);
+                await writeFile(`${evidence}/${width}x${height}-disclosure-focus.json`, JSON.stringify(proof,null,2));
+                assert(proof.focused); assert(proof.visible); assert(proof.outlineWidth >= 2);
+                assert.equal(proof.outlineStyle, 'solid');
+                for (const clip of proof.clips) {
+                    assert(proof.ring[0] >= clip[0] && proof.ring[1] >= clip[1]
+                        && proof.ring[2] <= clip[2] && proof.ring[3] <= clip[3],
+                    'The entire focus outline must fit inside the cell, scroll container and viewport');
+                }
+                return proof;
+            });
+        }
         for (const [width, height] of [[1440,900],[390,844],[390,667]]) {
             await browser('set', 'viewport', String(width), String(height));
             for (const mode of ['empty','partial','full'] as const) {

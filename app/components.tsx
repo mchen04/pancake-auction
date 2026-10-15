@@ -548,7 +548,8 @@ export function TeamsPanel(props: RoomProps) {
             : upcoming.includes(manager.id) ? String(upcoming.indexOf(manager.id) + 1) : '—';
           const turn = !state.lot && state.draft.nominatorId === manager.id && state.draft.status !== 'complete';
           const rowClass = ['team-row', 'team-grid', seatsEditable ? 'with-admin' : '', live ? 'with-turn' : '',
-            manager.id === me.id ? 'me' : '', turn ? 'turn' : ''].join(' ');
+            manager.id === me.id ? 'me' : '', turn ? 'turn' : '',
+            inspectedId === manager.id ? 'inspected' : ''].join(' ');
           return (
             <Fragment key={manager.id}>
               <div className={rowClass}>
@@ -557,7 +558,11 @@ export function TeamsPanel(props: RoomProps) {
                     aria-controls={`team-roster-${manager.id}`}
                     title={inspectedId === manager.id ? 'Hide roster' : 'View roster'}
                     onClick={() => setInspectedId(inspectedId === manager.id ? null : manager.id)}>
-                    {manager.name}
+                    <span className="team-inspect-name">{manager.name}</span>
+                    <svg className="team-inspect-cue" width="8" height="10" viewBox="0 0 8 10"
+                      aria-hidden="true" focusable="false">
+                      <path d="m2 1 4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                    </svg>
                   </button>
                   {status.text && <span className={`status ${status.tone}`}>{status.text}</span>}
                   {live && turnLabel !== '—' && (

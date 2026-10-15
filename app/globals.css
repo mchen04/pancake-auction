@@ -762,6 +762,9 @@ input {
 .team-row.me {
   background: #f4f7fd;
 }
+.team-row.inspected {
+  background: var(--court-tint);
+}
 .team-row.me .team-name {
   color: var(--court);
 }
@@ -783,15 +786,33 @@ input {
   font-weight: 600;
 }
 .team-inspect {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   border: 0;
   border-radius: 0;
-  padding: 0;
+  padding: 1px 2px;
   min-height: 26px;
+  min-width: 0;
   background: transparent;
-  color: inherit;
+  color: var(--court);
   font: inherit;
   text-align: left;
   white-space: nowrap;
+}
+.team-inspect-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.team-inspect-cue {
+  flex: none;
+}
+.team-inspect[aria-expanded="true"] .team-inspect-cue {
+  transform: rotate(90deg);
+}
+.team-inspect:focus-visible {
+  outline-offset: -2px;
 }
 .team-inspect:hover {
   text-decoration: underline;
