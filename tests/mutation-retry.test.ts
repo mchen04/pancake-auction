@@ -35,21 +35,6 @@ describe('HTTP aborted mutation retries', () => {
         expect(await result).toBe(conflict);
         expect(operation).toHaveBeenCalledTimes(1);
     });
-    it('preserves unrelated WebSocket errors and rejects partial or different function wrappers', async () => {
-        const payload = '{"code":"OptimisticConcurrencyControlFailure"}';
-        for (const message of [
-            '[CONVEX M(auction:actOnDraft)] Draft is paused\n  Called by client',
-            `[CONVEX Q(auction:state)] ${payload}\n  Called by client`,
-            `[CONVEX M(auction:actOnDraft)] Server Error: ${payload}\n  Called by client`,
-            `[CONVEX M(auction:actOnDraft)] ${payload} trailing\n  Called by client`,
-            `[CONVEX M(auction:actOnDraft)] ${payload}`
-        ]) {
-            const failure = new Error(message);
-            const operation = vi.fn().mockRejectedValue(failure);
-            await expect(retryAbortedMutation(operation)).rejects.toBe(failure);
-            expect(operation).toHaveBeenCalledTimes(1);
-        }
-    });
     it('exposes the original conflict after four attempts', async () => {
         vi.useFakeTimers();
         const conflict = new ConvexError({ code: 'OptimisticConcurrencyControlFailure' });

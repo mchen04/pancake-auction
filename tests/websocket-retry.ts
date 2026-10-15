@@ -142,7 +142,7 @@ async function main() {
         const pending = await evaluate('window.transport.bids.filter(bid => bid.amount === 60)');
         assert(pending.length >= 1);
         await contention.stop();
-        const results = (await bounded(outcomes, 'Concurrent browser bids')).map(result => {
+        const results = (await bounded(outcomes, 'Concurrent Node WebSocket bids')).map(result => {
             if (result.status === 'rejected') throw result.reason;
             return result.value;
         });
