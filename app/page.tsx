@@ -5,7 +5,7 @@ import { api } from '../convex/_generated/api';
 import {
   BlockPanel, CommissionerBar, PoolPanel, ResultsPanel, RosterPanel, TeamsPanel, turnsUntil
 } from './components';
-import type { Action, AuctionState, Manager } from '../lib/types';
+import type { Action, AuctionState, Manager, Player } from '../lib/types';
 
 type Tab = 'players' | 'teams' | 'roster' | 'results';
 const tabs: [Tab, string][] = [['players', 'Players'], ['teams', 'Teams'], ['roster', 'My roster'], ['results', 'Results']];
@@ -25,19 +25,24 @@ export default function Room() {
   const [error, setError] = useState('');
   const connection = useConvexConnectionState();
   const connected = connection.isWebSocketConnected;
+  const [connectionTimedOut, setConnectionTimedOut] = useState(false);
   const [busy, setBusy] = useState(false);
   const [offset, setOffset] = useState(0);
   const [tab, setTab] = useState<Tab>('players');
   const [opening, setOpening] = useState(1);
   const [turnSeen, setTurnSeen] = useState('');
   const pending = useRef(false);
+  const synchronize = useMutation(api.auction.syncTime);
   const claim = useMutation(api.auction.claimSeat);
   const restore = useMutation(api.auction.restoreSeat);
   const mutate = useMutation(api.auction.actOnDraft);
   const snapshot = useQuery(api.auction.state, ready ? { token } : 'skip');
   const pool = useQuery(api.auction.pool, snapshot ? { revision: snapshot.poolRevision } : 'skip');
-  const state: AuctionState | null = snapshot && pool?.revision === snapshot.poolRevision
-    ? { ...snapshot, players: pool.players } : null;
+  const [loadedPool, setLoadedPool] = useState<{ revision: string; players: Player[] }>();
+  if (pool && pool.revision === snapshot?.poolRevision && pool !== loadedPool) setLoadedPool(pool);
+  const availablePool = pool?.revision === snapshot?.poolRevision ? pool : loadedPool;
+  const state: AuctionState | null = snapshot && availablePool
+    ? { ...snapshot, players: availablePool.players } : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -59,8 +64,21 @@ export default function Room() {
   }, [restore]);
 
   useEffect(() => {
-    if (snapshot) setOffset(snapshot.serverNow - Date.now());
-  }, [snapshot]);
+    if (!connected) return;
+    let cancelled = false;
+    const sent = Date.now();
+    void synchronize({}).then(result => {
+      if (!cancelled) setOffset(result.serverNow - (sent + Date.now()) / 2);
+    }).catch(failure => {
+      if (!cancelled) setError(failure instanceof Error ? failure.message : 'Clock synchronization failed');
+    });
+    return () => { cancelled = true; };
+  }, [connected, connection.connectionCount, synchronize]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setConnectionTimedOut(true), 10000);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     if (!error) return;
@@ -95,7 +113,8 @@ export default function Room() {
 
   if (!state) {
     return <main className="gate"><h1 className="wordmark">Pancake Auction</h1>
-      <p>{connected ? 'Opening the draft room…' : 'Can’t reach the draft room. Retrying…'}</p></main>;
+      <p>{!connected && (connection.hasEverConnected || connectionTimedOut)
+        ? 'Can’t reach the draft room. Retrying…' : 'Opening the draft room…'}</p></main>;
   }
   const me = state.managers.find(manager => manager.id === state.me);
   if (!state.managers.length) {

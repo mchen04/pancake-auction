@@ -47,6 +47,7 @@ async function main() {
     const schema = await createIsolated('test');
     let server: ChildProcess | undefined;
     let serverLog = '';
+    let queryFault = false;
     const receipt: Record<string, unknown> = {};
     try {
         const raw = importFixture();
@@ -133,7 +134,24 @@ async function main() {
         assert.equal(receipt.winningRosterVisible, true);
         assert.equal(receipt.browserErrors, '');
         console.log('PASS B2/C2 production room follows a real setup import, auction, win and reload');
+        receipt.healthyQueryControl = await visible('.room', 'Michael');
+        assert.equal(receipt.healthyQueryControl, true);
+        await browser('eval', 'window.retryWithoutReload = true; true');
+        await currentBackend().admin('testOnly:queryFailure', { enabled: true });
+        queryFault = true;
+        receipt.forcedQueryBoundaryVisible = await visible('[role="alert"]', 'Could not load the draft room.');
+        assert.equal(receipt.forcedQueryBoundaryVisible, true);
+        await currentBackend().admin('testOnly:queryFailure', { enabled: false });
+        queryFault = false;
+        await browser('find', 'role', 'button', 'click', '--name', 'Retry', '--exact');
+        await browser('wait', '.room');
+        receipt.retryRecovered = await visible('.room', 'Michael');
+        receipt.retryWithoutReload = JSON.parse(await browser('eval', 'window.retryWithoutReload === true'));
+        assert.equal(receipt.retryRecovered, true);
+        assert.equal(receipt.retryWithoutReload, true);
+        console.log('PASS query-error boundary catches a real backend failure and Retry recovers without reload');
     } finally {
+        if (queryFault) await currentBackend().admin('testOnly:queryFailure', { enabled: false });
         try { await browser('close'); } finally {
             if (server) await stop(server);
             await dropIsolated(schema);

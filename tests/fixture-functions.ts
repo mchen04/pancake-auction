@@ -3,6 +3,26 @@ import { internalMutation } from '../convex/_generated/server';
 import { draftRecord, load, Store } from '../convex/engine';
 import type { Draft, Entry } from '../lib/types';
 
+export const queryFailure = internalMutation({ args: { enabled: v.boolean() }, handler: async (ctx, args) => {
+    const rows = await ctx.db.query('drafts').withIndex('key', q => q.eq('key', 'auction')).collect();
+    if (args.enabled) {
+        const row = rows[0];
+        await ctx.db.insert('drafts', { key: row.key, value: row.value, version: row.version,
+            nextLot: row.nextLot, nextEvent: row.nextEvent });
+    } else {
+        for (const row of rows.slice(1)) await ctx.db.delete(row._id);
+    }
+} });
+
+export const refreshPoolRevision = internalMutation({ args: {}, handler: async ctx => {
+    const pool = await ctx.db.query('pools').unique();
+    const imported = await ctx.db.query('imports').order('desc').first();
+    if (!pool || !imported) throw new Error('Import the fixture first');
+    const revision = crypto.randomUUID();
+    await ctx.db.patch(pool._id, { revision });
+    await ctx.db.patch(imported._id, { revision });
+} });
+
 export const configure = internalMutation({ args: { draft: v.optional(v.any()), managers: v.optional(v.any()),
     roster: v.optional(v.any()), lot: v.optional(v.any()), deadlineAfterMs: v.optional(v.number()) },
 handler: async (ctx, args) => {

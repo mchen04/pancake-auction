@@ -3,6 +3,7 @@ import { internalMutation, mutation, query } from './_generated/server';
 import { act, advance, claim, draftRecord, load, restore, Store } from './engine';
 import { action } from './validators';
 
+export const syncTime = mutation({ args: {}, handler: () => ({ serverNow: Date.now() }) });
 export const state = query({ args: { token: v.optional(v.string()) },
     handler: (ctx, args) => load(ctx, args.token, false) });
 export const pool = query({ args: { revision: v.string() }, handler: async ctx => {
