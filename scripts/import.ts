@@ -1,5 +1,5 @@
+import { evidenceDirectory } from "./evidence";
 import { mkdir } from "node:fs/promises";
-import { resolve } from "node:path";
 import { begin, closeDatabase } from "../lib/db";
 import { buildPool, sourceUrls } from "../lib/import-data";
 import { readSnapshot, writeSnapshot, type Snapshot } from "../lib/import-cache";
@@ -9,10 +9,7 @@ async function main() {
     const apply = process.argv.includes("--apply");
     console.log("Sleeper requests the players endpoint at most once per day. Reuse the evidence snapshot within 24 hours.");
     const startedAt = new Date();
-    const evidence = process.env.EVIDENCE_DIR;
-    if (evidence && resolve(evidence).startsWith(resolve(".") + "/")) {
-        throw new Error("EVIDENCE_DIR must be outside the repository");
-    }
+    const evidence = evidenceDirectory(process.env.EVIDENCE_DIR);
     const snapshot = evidence ? `${evidence}/import/sleeper-2026.json` : null;
     if (evidence) await mkdir(`${evidence}/import`, { recursive: true });
     const cached = snapshot ? await readSnapshot(snapshot) : null;

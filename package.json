@@ -12,7 +12,7 @@
     "import:sleeper": "tsx scripts/import.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
-    "test": "vitest run tests/rules.test.ts tests/import.test.ts tests/simulation.test.ts tests/review.test.tsx tests/import-cache.test.ts",
+    "test": "vitest run tests/rules.test.ts tests/import.test.ts tests/simulation.test.ts tests/review.test.tsx tests/import-cache.test.ts tests/evidence.test.ts",
     "test:db": "tsx tests/db.ts && tsx tests/review-db.ts && tsx tests/pool-process.ts && tsx tests/done-db.ts",
     "sim": "tsx scripts/sim.ts",
     "verify": "tsx scripts/verify.ts",

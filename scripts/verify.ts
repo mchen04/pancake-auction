@@ -1,15 +1,12 @@
+import { evidenceDirectory } from "./evidence";
 import { spawn } from "node:child_process";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import { loadEnvironment, safeError } from "./env";
 import { recordSpread } from "./simulation-results";
 async function main() {
     const started = Date.now();
     loadEnvironment();
-    const root = process.env.EVIDENCE_DIR;
-    if (!root || resolve(root).startsWith(resolve(".") + "/")) {
-        throw new Error("Set EVIDENCE_DIR outside the repository");
-    }
+    const root = evidenceDirectory(process.env.EVIDENCE_DIR, true)!;
     const dir = `${root}/verify-${new Date().toISOString().replace(/[:.]/g, "-")}`;
     await mkdir(dir, {
         recursive: true

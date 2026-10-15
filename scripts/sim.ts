@@ -1,8 +1,8 @@
+import { evidenceDirectory } from "./evidence";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import { mkdir, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import { Client } from "pg";
 import { loadEnvironment, safeError } from "./env";
 import { auditDraft } from "./audit";
@@ -569,10 +569,7 @@ async function main() {
     loadEnvironment();
     assert(Number.isInteger(runs) && runs > 0 && Number.isFinite(seed));
     assert(["fast", "real"].includes(timing));
-    const evidence = process.env.EVIDENCE_DIR;
-    if (!evidence || resolve(evidence).startsWith(resolve(".") + "/")) {
-        throw new Error("Set EVIDENCE_DIR outside the repository");
-    }
+    const evidence = evidenceDirectory(process.env.EVIDENCE_DIR, true)!;
     await mkdir(`${evidence}/sim`, {
         recursive: true
     });
