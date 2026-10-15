@@ -12,7 +12,9 @@ export function unwrap<T>(result: MutationResult<T>): T {
 export class AuctionClient {
     readonly transport: ConvexHttpClient;
     private pool: { revision: string; players: Player[] } | undefined;
-    constructor(public url: string) { this.transport = new ConvexHttpClient(url); }
+    constructor(public url: string, fetch_?: typeof fetch) {
+        this.transport = new ConvexHttpClient(url, { fetch: fetch_ });
+    }
     async state(token?: string): Promise<AuctionState> {
         const state = await this.transport.query(api.auction.state, token ? { token } : {});
         if (this.pool?.revision !== state.poolRevision) {
@@ -21,12 +23,12 @@ export class AuctionClient {
         return { ...state, players: this.pool.players };
     }
     async claim(managerId: number) {
-        return unwrap(await this.transport.mutation(api.auction.claimSeat, { managerId }));
+        return unwrap(await this.transport.mutation(api.auction.claimSeat, { managerId }, { skipQueue: true }));
     }
     async restore(token: string) {
-        return unwrap(await this.transport.mutation(api.auction.restoreSeat, { token }));
+        return unwrap(await this.transport.mutation(api.auction.restoreSeat, { token }, { skipQueue: true }));
     }
     async act(action: Action, token = '') {
-        return unwrap(await this.transport.mutation(api.auction.actOnDraft, { token, action }));
+        return unwrap(await this.transport.mutation(api.auction.actOnDraft, { token, action }, { skipQueue: true }));
     }
 }

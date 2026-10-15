@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { makeFunctionReference } from 'convex/server';
 import { api } from '../convex/_generated/api';
+import { AuctionClient } from '../lib/client';
 import { checkLeague } from '../scripts/readiness';
 import { counts, matching } from '../lib/rules';
 import type { Action, AuctionState, Entry } from '../lib/types';
@@ -11,6 +12,7 @@ import { act, claimSeat, getState, restoreSeat, RuleError, configure, currentBac
 
 let tokens: string[];
 const results: { name: string; result: string; error?: string }[] = [];
+const concurrency: { race: string; parallelPeak: number; queuedControlPeak: number }[] = [];
 async function run(name: string, test: () => Promise<void>, initialized = true) {
     const isolated = await createIsolated('test');
     try {
@@ -110,10 +112,26 @@ async function main() {
     });
     await run('bid/bid races accept one identical amount', async () => {
         const state = await nomination(await start());
+        let inFlight = 0;
+        let peak = 0;
+        const client = new AuctionClient(currentBackend().url, async (input, init) => {
+            inFlight++;
+            peak = Math.max(peak, inFlight);
+            try { return await fetch(input, init); } finally { inFlight--; }
+        });
         const race = await Promise.allSettled(Array.from({ length: 20 }, (_, i) =>
-            act({ type: 'bid', lotId: state.lot!.id, amount: 20 }, tokens[i % 10])));
+            client.act({ type: 'bid', lotId: state.lot!.id, amount: 20 }, tokens[i % 10])));
+        assert.equal(peak, 20, 'Twenty mutation requests must overlap on the wire');
         assert.equal(race.filter(result => result.status === 'fulfilled').length, 1);
         assert.equal((await events()).filter(event => event.type === 'bid').length, 1);
+        const parallelPeak = peak;
+        peak = 0;
+        const queued = await Promise.all(Array.from({ length: 20 }, (_, i) =>
+            client.transport.mutation(api.auction.actOnDraft, { token: tokens[i % 10],
+                action: { type: 'bid', lotId: state.lot!.id, amount: 21 } })));
+        assert.equal(peak, 1, 'The default SDK queue is the sequential negative control');
+        assert.equal(queued.filter(result => result.ok).length, 1);
+        concurrency.push({ race: 'bid/bid', parallelPeak, queuedControlPeak: peak });
     });
     await run('bid/pass and pass/pass races award once with no re-entry', async () => {
         const state = await nomination(await start());
@@ -372,6 +390,7 @@ async function main() {
     const root = process.env.EVIDENCE_DIR!;
     await mkdir(`${root}/db`, { recursive: true });
     await writeFile(`${root}/db/results.json`, JSON.stringify(results, null, 2));
+    await writeFile(`${root}/db/concurrency.json`, JSON.stringify(concurrency, null, 2));
     assert(results.every(result => result.result === 'passed'), 'Convex integration regressions must pass');
 }
 main().catch(error => { console.error(safeError(error)); process.exitCode = 1; });
