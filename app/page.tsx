@@ -1,9 +1,11 @@
 'use client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useMutation, useQuery, useConvexConnectionState } from 'convex/react';
+import { api } from '../convex/_generated/api';
 import {
   BlockPanel, CommissionerBar, PoolPanel, ResultsPanel, RosterPanel, TeamsPanel, turnsUntil
 } from './components';
-import type { Action, AuctionState, Manager, Player } from '../lib/types';
+import type { Action, AuctionState, Manager } from '../lib/types';
 
 type Tab = 'players' | 'teams' | 'roster' | 'results';
 const tabs: [Tab, string][] = [['players', 'Players'], ['teams', 'Teams'], ['roster', 'My roster'], ['results', 'Results']];
@@ -18,60 +20,47 @@ function headline(state: AuctionState, me: Manager) {
 }
 
 export default function Room() {
-  const [state, setState] = useState<AuctionState | null>(null);
+  const [token, setToken] = useState<string | undefined>();
+  const [ready, setReady] = useState(false);
   const [error, setError] = useState('');
-  const [connected, setConnected] = useState(true);
+  const connection = useConvexConnectionState();
+  const connected = connection.isWebSocketConnected;
   const [busy, setBusy] = useState(false);
   const [offset, setOffset] = useState(0);
   const [tab, setTab] = useState<Tab>('players');
   const [opening, setOpening] = useState(1);
   const [turnSeen, setTurnSeen] = useState('');
-  const pool = useRef<{ revision: string; players: Player[] } | null>(null);
-  const fetching = useRef<Promise<void> | null>(null);
   const pending = useRef(false);
-
-  const fetchState = useCallback(async () => {
-    if (fetching.current) return fetching.current;
-    const sent = Date.now();
-    const query = pool.current ? `?poolRevision=${encodeURIComponent(pool.current.revision)}` : '';
-    const request = async () => {
-      try {
-        const response = await fetch(`/api/state${query}`, { cache: 'no-store' });
-        if (!response.ok) throw new Error('Connection lost');
-        const next: AuctionState = await response.json();
-        if (pool.current?.revision === next.poolRevision) next.players = pool.current.players;
-        else pool.current = { revision: next.poolRevision, players: next.players };
-        setOffset(next.serverNow - (sent + Date.now()) / 2);
-        setState(next);
-        setConnected(true);
-      } catch {
-        setConnected(false);
-      } finally {
-        fetching.current = null;
-      }
-    };
-    fetching.current = request();
-    return fetching.current;
-  }, []);
+  const claim = useMutation(api.auction.claimSeat);
+  const restore = useMutation(api.auction.restoreSeat);
+  const mutate = useMutation(api.auction.actOnDraft);
+  const snapshot = useQuery(api.auction.state, ready ? { token } : 'skip');
+  const pool = useQuery(api.auction.pool, snapshot ? { revision: snapshot.poolRevision } : 'skip');
+  const state: AuctionState | null = snapshot && pool?.revision === snapshot.poolRevision
+    ? { ...snapshot, players: pool.players } : null;
 
   useEffect(() => {
     let cancelled = false;
     async function initialize() {
-      const token = localStorage.getItem('pancake-seat');
-      if (token) {
+      const saved = localStorage.getItem('pancake-seat') || undefined;
+      if (saved) {
         try {
-          const response = await fetch('/api/restore', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token })
-          });
-          if (response.status === 401) localStorage.removeItem('pancake-seat');
-        } catch {}
+          const result = await restore({ token: saved });
+          if (result.ok && !cancelled) setToken(saved);
+          else if (!result.ok && result.status === 401) localStorage.removeItem('pancake-seat');
+        } catch {
+          if (!cancelled) setToken(saved);
+        }
       }
-      if (!cancelled) await fetchState();
+      if (!cancelled) setReady(true);
     }
     void initialize();
-    const poll = setInterval(() => void fetchState(), 500);
-    return () => { cancelled = true; clearInterval(poll); };
-  }, [fetchState]);
+    return () => { cancelled = true; };
+  }, [restore]);
+
+  useEffect(() => {
+    if (snapshot) setOffset(snapshot.serverNow - Date.now());
+  }, [snapshot]);
 
   useEffect(() => {
     if (!error) return;
@@ -85,17 +74,19 @@ export default function Room() {
     setBusy(true);
     setError('');
     try {
-      const response = await fetch(`/api/${endpoint}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error);
-      if (result.token) localStorage.setItem('pancake-seat', result.token);
-      if (fetching.current) await fetching.current;
-      await fetchState();
+      const sent = Date.now();
+      const result = endpoint === 'claim' && 'managerId' in body
+        ? await claim({ managerId: body.managerId })
+        : 'type' in body ? await mutate({ token: token || '', action: body }) : null;
+      if (!result) throw new Error('Invalid action');
+      setOffset(result.serverNow - (sent + Date.now()) / 2);
+      if (!result.ok) throw new Error(result.error);
+      if (typeof result.value === 'string') {
+        localStorage.setItem('pancake-seat', result.value);
+        setToken(result.value);
+      }
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Request failed');
-      await fetchState();
     } finally {
       setBusy(false);
       pending.current = false;
