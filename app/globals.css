@@ -1316,7 +1316,10 @@ input {
     grid-template-columns: minmax(0, 1fr) 40px 40px 42px 28px 24px 34px;
   }
   .team-grid.with-turn.with-admin {
-    grid-template-columns: minmax(0, 1fr) 40px 40px 42px 28px 24px 0;
+    grid-template-columns: minmax(0, 1fr) 40px 40px 42px 28px 24px;
+  }
+  .team-grid.with-turn.with-admin > :nth-child(7) {
+    display: none;
   }
   .team-release-heading, .team-release {
     display: none;

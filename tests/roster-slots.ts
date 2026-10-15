@@ -246,13 +246,14 @@ async function main() {
                 lines: { text: string; fits: boolean; width: number; scrollWidth: number }[] }[];
             columns: { text: string; fits: boolean; excluded: string | null }[];
             admin: boolean; turn: boolean; gutter: number; document: number[]; viewport: number[];
+            scrollWidth: number; clientWidth: number; tracks: string;
         }>(`(() => {
             const scroll=document.querySelector('.teams .scroll');
             const header=document.querySelector('.teams .table-head');
             const excluded=(child,index)=>{
                 const style=getComputedStyle(child),r=child.getBoundingClientRect();
                 if(index===6&&child.parentElement.classList.contains('with-turn')
-                    &&style.visibility==='hidden'&&r.width===0)return 'hidden-zero-width-turn';
+                    &&(style.display==='none'||style.visibility==='hidden'&&r.width===0))return 'inline-turn-column';
                 if(child.matches('.team-release,.team-release-heading')&&style.display==='none')
                     return 'collapsed-seat-control';
                 if(child.matches('.team-release')&&style.gridColumnEnd==='-1')return 'expanded-seat-control';
@@ -285,14 +286,56 @@ async function main() {
                         return Math.abs(a.left-h.left)<1&&Math.abs(a.right-h.right)<1;})};
             });
             return {names,columns,admin:header.classList.contains('with-admin'),turn:header.classList.contains('with-turn'),
-                gutter:scroll.offsetWidth-scroll.clientWidth,
+                gutter:scroll.offsetWidth-scroll.clientWidth,scrollWidth:scroll.scrollWidth,clientWidth:scroll.clientWidth,
+                tracks:getComputedStyle(header).gridTemplateColumns,
                 document:[document.documentElement.scrollWidth,document.documentElement.scrollHeight],
                 viewport:[innerWidth,innerHeight]};
         })()`);
     }
+    async function panelWidths(width: number, label: string) {
+        const layouts: { expanded: boolean; tab: string; panels: {
+            name: string; scrollWidth: number; clientWidth: number; overflowX: string }[] }[] = [];
+        for (const expanded of [false, true]) {
+            if (width <= 860) await tab('Teams');
+            if (expanded) await inspectTeam(2);
+            const tabs = width >= 1220 ? ['All']
+                : width <= 860 ? ['Teams','Players','My roster','Results'] : ['Players','My roster','Results'];
+            for (const selected of tabs) {
+                if (selected !== 'All') await tab(selected);
+                const panels = await evaluate<(typeof layouts)[number]['panels']>(`(() => {
+                    const visible=element=>{const r=element.getBoundingClientRect();return r.width>0&&r.height>0;};
+                    return [...document.querySelectorAll('.panel .scroll,.team-roster')]
+                        .filter(visible).map(element=>({name:element.classList.contains('team-roster')
+                            ?'inspected roster':element.closest('.panel').getAttribute('aria-label'),
+                            scrollWidth:element.scrollWidth,clientWidth:element.clientWidth,
+                            overflowX:getComputedStyle(element).overflowX}));
+                })()`);
+                layouts.push({ expanded, tab: selected, panels });
+                if ((selected === 'Teams' || selected === 'All') && (width <= 390 || width === 1440)) {
+                    await browser('scroll', 'up', '2000', '--selector', '.teams .scroll');
+                    await browser('screenshot', `${evidence}/${label}-${expanded ? 'expanded' : 'collapsed'}-panels.png`);
+                }
+            }
+        }
+        if (width <= 860) await tab('Teams');
+        await inspectTeam(2);
+        return layouts;
+    }
+    function assertPanelWidths(layouts: Awaited<ReturnType<typeof panelWidths>>) {
+        for (const expanded of [false, true]) {
+            const panels = layouts.filter(layout => layout.expanded === expanded).flatMap(layout => layout.panels);
+            assert.deepEqual([...new Set(panels.map(panel => panel.name))].sort(),
+                ['Players','Teams','My roster','Results', ...(expanded ? ['inspected roster'] : [])].sort());
+            for (const panel of panels) {
+                assert(panel.clientWidth > 0, `${panel.name} must be visible for its width check`);
+                assert(panel.scrollWidth <= panel.clientWidth,
+                    `${panel.name} must not scroll horizontally: ${panel.scrollWidth} > ${panel.clientWidth}`);
+            }
+        }
+    }
     try {
         const nameViewports = [[1180,768],[1181,768],[1200,768],[1219,768],[1220,768],
-            [1280,720],[1440,900],[1024,768],[390,844],[390,667],[360,640],[375,667]];
+            [1280,720],[1440,900],[1024,768],[390,844],[390,667],[360,640],[360,667],[375,667]];
         for (const [width, height] of nameViewports) {
             for (const commissioner of [true, false]) {
                 for (const status of ['paused','running','setup'] as const) {
@@ -322,14 +365,18 @@ async function main() {
                                 .closest('.team-row').textContent.includes('Nominating')`);
                             nomination = await teamNames();
                         }
-                        const proof = { normal, reserved, nomination };
+                        const panels = await panelWidths(width, label);
+                        const proof = { normal, reserved, nomination, panels };
                         await writeFile(`${evidence}/${label}-team-names.json`, JSON.stringify(proof,null,2));
                         await browser('scroll', 'up', '2000', '--selector', '.teams .scroll');
                         await browser('screenshot', `${evidence}/${label}-team-names.png`);
                         assert(reserved.gutter >= 15, 'The scrollbar control must reserve real browser space');
+                        assertPanelWidths(panels);
                         for (const layout of [normal, reserved, ...(nomination ? [nomination] : [])]) {
                             assert.equal(layout.admin, commissioner && status !== 'running');
                             assert.equal(layout.turn, live);
+                            assert(layout.scrollWidth <= layout.clientWidth,
+                                `Teams must not scroll horizontally: ${layout.scrollWidth} > ${layout.clientWidth}`);
                             assert.deepEqual(layout.names.map(row => row.name), state.managers.map(row => row.name));
                             assert(layout.document[0] <= width && layout.document[1] <= height);
                             for (const name of layout.names) {
@@ -342,7 +389,7 @@ async function main() {
                                 if (!column.excluded) assert(column.fits, `Data column must fit: ${column.text}`);
                             }
                             const hiddenTurns = layout.columns.filter(column =>
-                                column.excluded === 'hidden-zero-width-turn');
+                                column.excluded === 'inline-turn-column');
                             assert.equal(hiddenTurns.length,
                                 live && commissioner && status !== 'running' && width <= 860 ? 11 : 0);
                         }
