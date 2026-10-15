@@ -168,7 +168,7 @@ export function ShotClock({ draft, offset }: { draft: Draft; offset: number }) {
   const digits = remaining === null ? '--' : remaining >= 10000
     ? String(Math.ceil(remaining / 1000)) : (remaining / 1000).toFixed(1);
   if (draft.status === 'setup' || draft.status === 'complete') return null;
-  const caption = draft.status === 'paused' ? 'Paused' : draft.phase === 'bidding' ? 'Bid clock' : 'Nominate';
+  const caption = draft.status === 'paused' ? 'Paused' : draft.phase === 'bidding' ? 'Bid clock' : 'Nomination';
   return (
     <div className={`shot-clock ${urgent ? 'urgent' : ''} ${draft.status === 'paused' ? 'frozen' : ''}`}
       role="timer" aria-label={`${caption}: ${digits} seconds`}>

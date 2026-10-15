@@ -683,6 +683,9 @@ input {
   align-items: flex-start;
   gap: 0;
 }
+.team-grid.with-turn .status.turn {
+  display: none;
+}
 .release {
   width: 100%;
   min-height: 26px;
@@ -1139,6 +1142,9 @@ input {
   }
   .team-grid.with-turn.with-admin > :nth-child(7) {
     visibility: hidden;
+  }
+  .team-grid.with-turn.with-admin .status.turn {
+    display: inline;
   }
   .team-row.with-admin {
     min-height: 44px;
