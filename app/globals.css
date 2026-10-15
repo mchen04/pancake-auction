@@ -449,6 +449,18 @@ input {
   padding: 14px 14px 12px;
   gap: 10px;
 }
+.block-information {
+  display: contents;
+}
+.block > .bid-controls {
+  order: 1;
+}
+.block-information > .details {
+  order: 2;
+}
+.block > .last-win {
+  order: 3;
+}
 .block-top {
   display: flex;
   gap: 14px;
@@ -651,7 +663,7 @@ input {
   background: var(--lead-tint);
   font-size: 12px;
 }
-@media (min-width: 1181px) {
+@media (min-width: 1220px) {
   .last-win {
     display: none;
   }
@@ -912,7 +924,7 @@ input {
   font-size: 11px;
 }
 
-@media (max-height: 800px) and (min-width: 1181px) {
+@media (max-height: 800px) and (min-width: 1220px) {
   .room {
     grid-template-rows: auto auto minmax(0, 1fr) minmax(0, 1fr);
     grid-template-areas:
@@ -945,7 +957,7 @@ input {
   }
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1219px) {
   .narrow-only {
     display: revert;
   }
@@ -1030,7 +1042,7 @@ input {
     gap: 8px;
     padding: 0 8px 8px;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto auto auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, auto) auto minmax(240px, 1fr);
     grid-template-areas: "top" "block" "tabs" "panel";
   }
   .topbar {
@@ -1091,6 +1103,19 @@ input {
   }
   .block {
     padding: 10px;
+  }
+  .block-information {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  .block-information > * {
+    flex: none;
+  }
+  .block > .bid-controls, .block > .last-win {
+    flex: none;
   }
   .shot-clock {
     width: 92px;

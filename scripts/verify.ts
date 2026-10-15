@@ -19,6 +19,7 @@ async function main() {
         ["test:ui"],
         ["test:volume"],
         ["build"],
+        ["test:layout"],
         ["test:room"],
         [
             "sim",

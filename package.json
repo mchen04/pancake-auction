@@ -19,7 +19,8 @@
     "league:check": "tsx scripts/cli.ts check",
     "test:ui": "tsx tests/ui.ts",
     "test:volume": "tsx tests/pool-volume.ts",
-    "test:room": "tsx tests/ui-import.ts"
+    "test:room": "tsx tests/ui-import.ts",
+    "test:layout": "tsx tests/layout.ts"
   },
   "dependencies": {
     "next": "^16.0.0",

@@ -29,7 +29,7 @@ EVIDENCE_DIR=/absolute/path/outside/repo npm run sim -- --runs 3 --timing fast -
 EVIDENCE_DIR=/absolute/path/outside/repo npm run sim -- --runs 1 --timing real --seed 42
 ```
 
-`verify` runs typecheck, lint, unit tests, database tests, component browser regressions, query-volume checks, production build, a browser import-and-sale regression, three fast full drafts, and one real-timing full draft. It records each exit code and log path. Simulations build and start the production app on a free port. They copy the live imported pool into fresh `sim_*` schemas. Without an import, they label the synthetic fallback. Ten independent HTTP clients claim ten seats and poll concurrently. A separate process restores a saved seat token during each run. The event replay checker independently recomputes budgets, matching, eligibility, bidding, timers, sales, placement moves, and turn rotation.
+`verify` runs typecheck, lint, unit tests, database tests, component browser regressions, query-volume checks, production build, browser layout regressions, a browser import-and-sale regression, three fast full drafts, and one real-timing full draft. It records each exit code and log path. Simulations build and start the production app on a free port. They copy the live imported pool into fresh `sim_*` schemas. Without an import, they label the synthetic fallback. Ten independent HTTP clients claim ten seats and poll concurrently. A separate process restores a saved seat token during each run. The event replay checker independently recomputes budgets, matching, eligibility, bidding, timers, sales, placement moves, and turn rotation.
 
 Tests use `test_*` schemas and recorded import fixtures. They never call Sleeper. Both tools drop their own schemas, even on failure. `--keep-schema` preserves a schema for inspection. Fast timing uses 3/3/1.5/4.5 seconds and 150 ms polling. Real runs retain 500 ms polling. Real timing uses 10/10/5/15 seconds. Database tests exercise real nomination and bid expiry. Synthetic fixture setup uses longer clocks for unrelated races.
 
@@ -120,3 +120,10 @@ One full-screen page; only panels scroll. Wide screens show the player pool, the
 ## Delivery boundaries
 
 No deployment, push or PR is part of this stage. Use `league:check` before starting the live draft. Verification data never enters the live schema.
+
+## Compact-screen regression checks
+
+`npm run test:layout` uses the stored real player pool, production fonts, and a separate headless Chromium browser.
+It checks the desktop layout boundary and all four phone tabs with Giannis details open and closed.
+At 390×667 and 390×844, each selected tab keeps at least 100 pixels of scroll space.
+Player information scrolls inside the auction block while the normal bid controls remain visible.

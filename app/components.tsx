@@ -466,30 +466,32 @@ export function BlockPanel(props: RoomProps & { offset: number; opening: number;
   const player = findPlayer(state, lot?.playerId);
   return (
     <section className={`panel block ${lot ? 'bidding' : ''}`} aria-label="Current player">
-      <div className="block-top">
-        <div className="block-main">
-          {lot ? (
-            <>
-              <div className="lot-heading">
-                <h2 title={player?.name ?? lot.playerId}>{player?.name ?? lot.playerId}</h2>
-                <button className="link" aria-expanded={showDetails}
-                  onClick={() => setDetailsFor(showDetails || !lot ? null : lot.id)}>
-                  {showDetails ? 'Hide details' : 'Details'}
-                </button>
-              </div>
-              {player ? <PlayerLine player={player} /> : <p className="muted">Player data is loading</p>}
-              <div className="high-bid">
-                <strong>{dollars(lot.highBid)}</strong>
-                <span>{lot.highBidderId === props.me.id ? 'You lead' : `${nameOf(state, lot.highBidderId)} leads`}</span>
-                <small>Nominated by {nameOf(state, lot.nominatorId)}</small>
-              </div>
-            </>
-          ) : <NominationView {...props} />}
+      <div className="block-information">
+        <div className="block-top">
+          <div className="block-main">
+            {lot ? (
+              <>
+                <div className="lot-heading">
+                  <h2 title={player?.name ?? lot.playerId}>{player?.name ?? lot.playerId}</h2>
+                  <button className="link" aria-expanded={showDetails}
+                    onClick={() => setDetailsFor(showDetails || !lot ? null : lot.id)}>
+                    {showDetails ? 'Hide details' : 'Details'}
+                  </button>
+                </div>
+                {player ? <PlayerLine player={player} /> : <p className="muted">Player data is loading</p>}
+                <div className="high-bid">
+                  <strong>{dollars(lot.highBid)}</strong>
+                  <span>{lot.highBidderId === props.me.id ? 'You lead' : `${nameOf(state, lot.highBidderId)} leads`}</span>
+                  <small>Nominated by {nameOf(state, lot.nominatorId)}</small>
+                </div>
+              </>
+            ) : <NominationView {...props} />}
+          </div>
+          <ShotClock draft={state.draft} offset={offset} />
         </div>
-        <ShotClock draft={state.draft} offset={offset} />
+        {lot && player && showDetails && <PlayerDetails player={player} />}
       </div>
       {lot && <BidControls key={lot.id} {...props} player={player} />}
-      {lot && player && showDetails && <PlayerDetails player={player} />}
       <LastWin {...props} />
     </section>
   );
