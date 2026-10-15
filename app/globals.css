@@ -602,6 +602,17 @@ input {
   display: grid;
   gap: 6px;
 }
+.pinned-lead {
+  display: none;
+  align-items: baseline;
+  gap: 8px;
+  font-weight: 600;
+}
+.pinned-lead strong {
+  font-family: var(--font-display), sans-serif;
+  font-size: 22px;
+  line-height: 1;
+}
 .bid-buttons {
   display: flex;
   gap: 6px;
@@ -676,19 +687,19 @@ input {
 
 .team-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 52px 52px 50px 38px 30px;
+  grid-template-columns: minmax(0, 1fr) 48px 46px 44px 34px 28px;
   align-items: center;
-  column-gap: 6px;
-  padding: 0 12px;
+  column-gap: 5px;
+  padding: 0 10px;
 }
 .team-grid.with-admin {
-  grid-template-columns: minmax(0, 1fr) 52px 52px 50px 38px 30px 62px;
+  grid-template-columns: minmax(0, 1fr) 48px 46px 44px 34px 28px 58px;
 }
 .team-grid.with-turn {
-  grid-template-columns: minmax(0, 1fr) 52px 52px 50px 38px 30px 38px;
+  grid-template-columns: minmax(0, 1fr) 48px 46px 44px 34px 28px 34px;
 }
 .team-grid.with-turn.with-admin {
-  grid-template-columns: minmax(0, 1fr) 52px 52px 50px 38px 30px 38px 62px;
+  grid-template-columns: minmax(0, 1fr) 48px 46px 44px 34px 28px 34px 58px;
 }
 .team-grid.with-admin .team-name {
   flex-direction: column;
@@ -1113,6 +1124,9 @@ input {
   }
   .block-information > * {
     flex: none;
+  }
+  .block.details-open .pinned-lead {
+    display: flex;
   }
   .block > .bid-controls, .block > .last-win {
     flex: none;
