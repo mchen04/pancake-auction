@@ -6,7 +6,6 @@
     "dev": "tsx scripts/cli.ts dev",
     "build": "next build && tsx scripts/clean-generated.ts",
     "start": "tsx scripts/cli.ts start",
-    "migrate": "tsx scripts/cli.ts migrate",
     "league:managers": "tsx scripts/cli.ts managers",
     "seat:release": "tsx scripts/cli.ts release",
     "import:sleeper": "tsx scripts/import.ts",
@@ -20,18 +19,17 @@
     "test:ui": "tsx tests/ui.ts && tsx tests/preference.ts",
     "test:volume": "tsx tests/pool-volume.ts",
     "test:room": "tsx tests/ui-import.ts",
-    "test:layout": "tsx tests/layout.ts"
+    "test:layout": "tsx tests/layout.ts",
+    "backend:local": "tsx scripts/local-dev.ts"
   },
   "dependencies": {
     "convex": "^1.46.0",
     "next": "^16.0.0",
-    "pg": "^8.16.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "@types/pg": "^8.15.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "eslint": "^9.0.0",

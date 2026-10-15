@@ -1,26 +1,20 @@
 # Pancake Auction
 
-A single-page NBA dynasty startup auction for ten managers. Next.js App Router and PostgreSQL run the room. Vercel route handlers use the Node runtime. Clients poll every 500 ms. No accounts, workers, sockets, cron, ORM, or runtime sports API calls are required.
+A single-page NBA dynasty startup auction for ten managers. Next.js renders the room. Convex stores the draft and supplies live subscriptions. Runtime code reads only the imported database pool.
 
 ## Setup
 
-Use Node 24 or later and a Neon database. Install dependencies with `npm ci`. Set `DATABASE_URL` for migrations and CLIs. Set `DATABASE_URL_POOLED` for the app. Set `DB_SCHEMA` to choose the schema; its default is `auction`.
+Use Node 24 or later. Install dependencies with `npm ci`. For this local phase, run `npm run backend:local` in one terminal. It starts Convex in anonymous mode, without a login, and isolates the CLI configuration under the ignored `.convex` directory. Keep that terminal running. The CLI writes local deployment state and the public frontend URL for Next.js.
 
-Local CLIs read the authorized file `/Users/michaelchen/.config/pancake-auction/.env`. `PANCAKE_AUCTION_ENV_FILE` selects another authorized file. Neither URL belongs in the repository. On Vercel, set the two URLs and `DB_SCHEMA` as environment variables. Production cookies use HTTPS. `NEXT_DIST_DIR` optionally separates local production builds; its default is `.next`. `SEAT_COOKIE_SECURE=false` supports local HTTP simulations.
+Run `npm run league:managers`, then import the pool and run `npm run league:check`. `CONVEX_LOCAL_DIR` optionally selects a local deployment configuration directory. `CONVEX_URL` or `NEXT_PUBLIC_CONVEX_URL` selects the frontend's backend URL. `NEXT_DIST_DIR` optionally separates production builds. No cloud deployment or deploy key is required for verification.
 
 ```sh
-npm run migrate
+npm run backend:local
+npm run league:managers
 EVIDENCE_DIR=/absolute/path/outside/repo npm run import:sleeper
 EVIDENCE_DIR=/absolute/path/outside/repo npm run import:sleeper -- --apply
-npm run league:managers
 npm run league:check
 npm run dev
-```
-
-`league/managers.json` contains the confirmed names: Michael, Matthew, Justin, Tianna, Kyle, Tyler, Jeremy, Jet, Petch, and Zach. Michael is commissioner. Tests, simulations, and browser checks use the same file in isolated schemas. Nomination order is randomized when the draft starts.
-
-The manager loader uses this file by default. `--file /path/managers.json` can supply another valid ten-name configuration before the draft starts. The read-only readiness check requires the exact confirmed names and commissioner, applied migrations, a completed import with matching counts, setup status, no lots, and 10/10/5/15 production timings. Replacing a configuration before starting releases previous seat claims.
-```sh
 npm run seat:release -- --name "<manager name>"
 npm run build
 npm run start -- -p 3000
@@ -29,25 +23,19 @@ EVIDENCE_DIR=/absolute/path/outside/repo npm run sim -- --runs 3 --timing fast -
 EVIDENCE_DIR=/absolute/path/outside/repo npm run sim -- --runs 1 --timing real --seed 42
 ```
 
-`verify` runs typecheck, lint, unit tests, database tests, component browser regressions, query-volume checks, production build, browser layout regressions, a browser import-and-sale regression, three fast full drafts, and one real-timing full draft. It records each exit code and log path. Simulations build and start the production app on a free port. They copy the live imported pool into fresh `sim_*` schemas. Without an import, they label the synthetic fallback. Ten independent HTTP clients claim ten seats and poll concurrently. A separate process restores a saved seat token during each run. The event replay checker independently recomputes budgets, matching, eligibility, bidding, timers, sales, placement moves, and turn rotation.
+`league/managers.json` contains Michael, Matthew, Justin, Tianna, Kyle, Tyler, Jeremy, Jet, Petch, and Zach. Michael is commissioner. The internal manager loader refuses after the draft starts. The read-only readiness check requires the exact configuration, a completed import with matching pool counts, setup status, no lots, and production 10/10/5/15 timings. Nomination order is randomized at draft start.
 
-Tests use `test_*` schemas and recorded import fixtures. They never call Sleeper. Both tools drop their own schemas, even on failure. `--keep-schema` preserves a schema for inspection. Fast timing uses 3/3/1.5/4.5 seconds and 150 ms polling. Real runs retain 500 ms polling. Real timing uses 10/10/5/15 seconds. Database tests exercise real nomination and bid expiry. Synthetic fixture setup uses longer clocks for unrelated races.
+Import, manager setup, and CLI recovery call internal functions through the Convex CLI admin path. They are unavailable to public clients. This phase targets local deployments only.
 
 ## Local verification
 
-Set `PANCAKE_AUCTION_ENV_FILE` to an authorized local environment file containing `DATABASE_URL` and `DATABASE_URL_POOLED`.
-Use a disposable local PostgreSQL database with an already migrated and imported `auction` schema.
-Set `EVIDENCE_DIR` outside the repository, then run `npm run verify`.
-The installed `agent-browser` CLI supplies the separate headless Chromium checks.
-Verification reads the source pool and creates isolated `test_*` and `sim_*` schemas, which it drops afterward.
-It leaves the source schema unchanged. No remote credentials or network import are needed.
+Set `EVIDENCE_DIR` outside the repository. The containment check resolves physical paths, including symlinks and missing suffixes. Run `npm run verify`. The installed `agent-browser` CLI supplies separate headless Chromium browsers.
 
-Bots draw player valuations from the seed, projection, dynasty ADP, manager bias, noise, and positional need.
-Their concurrent polling loops raise with mixed increments, snipe, bid maximums, pass, or await expiry.
-Every full run requires 400 accepted bids, 25 expiry sales, three nomination timeouts, five exact-maximum bids,
-and an average unspent budget below $150. Each team must fill all twenty active places.
-The independent replay recomputes every bid maximum and all fifteen prior invariants.
-Run summaries include counts and the spread across seeds. Verification rejects identical bid or expiry counts across seeds.
+Each test command and simulation creates a fresh anonymous local Convex backend with its own ports, data directory, and private CLI configuration. The harness removes that state and stops its processes afterward. No existing deployment, credentials, or database is used. Tests fail if the backend cannot start. Fixtures replace all Sleeper requests in importer tests.
+
+`verify` runs typecheck, lint, unit tests, backend integration tests, component and browser regressions, subscription-volume checks, a production build, layout and import-and-sale checks, three fast full drafts, and one real-timing full draft. It records each exit code and log path. Simulations import the stored public Sleeper pool fixture with its original fetchedAt; they never re-pull data. Ten independent Convex HTTP clients claim seats and call the public API concurrently. A separate process restores a saved token during each run.
+
+Bots draw valuations from the seed, projection, dynasty ADP, manager bias, noise, and positional need. They raise concurrently with mixed increments, snipe, bid maximums, give up, or await expiry. Fast clocks use 3/3/1.5/4.5 seconds; real clocks use 10/10/5/15. Every draft requires 400 accepted bids, 25 expiry sales, three nomination timeouts, five exact-maximum bids, an average unspent budget below $150, and 200 active players. The independent event replay retains all 18 invariants. Run summaries record the per-seed spread.
 
 ## Auction rules
 
@@ -57,7 +45,7 @@ Run summaries include counts and the spread across seeds. Verification rejects i
 | Order | A cryptographically random fixed permutation; straight rotation. |
 | Nomination | Ten seconds; player plus opening bid; the nominator makes the first bid. |
 | Timeout | With an active opening, nominate the top projected legally available player for $1. Missing projections sort last. With only taxi/IR openings, record a passed turn without marking done. |
-| Bid timer | Start at ten seconds. Later accepted bids use `min(old deadline + 5s, database now + 15s)`. |
+| Bid timer | Start at ten seconds. Later accepted bids use `min(old deadline + 5s, Convex now + 15s)`. |
 | Late bid | Reject at or after the deadline; resolve the expired lot first. |
 | Maximum | Best legal placement: remaining budget minus $1 for each active opening left afterward. Taxi and IR never add reserve. |
 | Give up | Everyone except the high bidder may pass. No re-entry on that lot. Managers unable to raise count as out. |
@@ -72,17 +60,21 @@ Taxi has three places. A rookie (`years_exp=0`) qualifies. A non-rookie qualifie
 
 A manager with a full active roster can still bid and nominate eligible Taxi or Out players. Their maximum is the full remaining budget. With active openings, a taxi/IR placement reserves $1 for every active opening. Taxi and IR can remain empty. Full groups, empty eligible pools, exhausted budgets, explicit Done choices, and a full cycle of timeout passes terminate without deadlock. Each nomination clears the passed-turn cycle. A roster move clears that manager’s earlier pass because their legal nominations can change. Taxi/IR-only teams keep their turns unless they choose Done or have no legal nomination. The event log records each passed turn and the completion reason.
 
-Pause stores the exact remaining milliseconds. Resume adds that amount to the database clock. Undo targets the sale shown in its confirmation. A changed latest sale produces a 409 instead of undoing another sale. Undo removes the confirmed sale from its current placement and refunds the price. It returns the player, voids the open lot and all its bids through the lot status, restores the undone nominator, clears that manager's done flag, and pauses. Undo repeats through the sale stack. Bid and event records remain for audit. Automatic awards wait while paused. Resume evaluates expiry and all-out under the draft lock. Force-end awards the current high bid immediately, including while paused.
+Pause stores the exact remaining milliseconds. Resume adds that amount to the Convex mutation clock. Undo targets the sale shown in its confirmation. A changed latest sale produces a 409 instead of undoing another sale. Undo removes the confirmed sale from its current placement and refunds the price. It returns the player, voids the open lot and all its bids through the lot status, restores the undone nominator, clears that manager's done flag, and pauses. Undo repeats through the sale stack. Bid and event records remain for audit. Automatic awards wait while paused. Resume evaluates expiry and all-out inside the serializable transaction. Force-end awards the current high bid immediately, including while paused.
 
-## Database and clock
+## Storage and clock
 
-Every mutation locks the singleton draft row in one transaction. It validates the current lot ID and the seat token. Expired reads acquire the same lock and advance the room. Reads with no expired deadline use a consistent database snapshot without locking the draft row. The player cache is keyed by the latest completed database import ID. Each state read checks that revision without transferring unchanged players. Clients send their pool revision and receive players only when it differs, so open rooms and warm server processes see setup imports. Current lots also carry player details; missing pool entries render a safe fallback. No decision uses a client or app-server clock. Responses include the database time for countdown display.
+Convex mutations are serializable transactions. Every action validates its seat token, current lot, legal placements, budget, and current draft state inside one mutation. Competing claims, bids, passes, awards, moves, and undos commit atomically. Rule rejections preserve any deadline transition already resolved by that transaction.
 
-Constraints enforce one open lot, one live sale per player, unique passes, and increasing bids. Events record every nomination, bid, pass, sale, placement, pause/resume, undo, and force-end. Database timestamps and decision times permit replay. A trigger rejects event updates and deletes. Plain SQL migrations track applied filenames in the selected schema.
+A singleton draft document holds the monotonic version and the production timing settings. Each running deadline schedules an internal mutation with draft ID, lot ID, version, and expected deadline. The handler does nothing unless every field still matches and the deadline has passed. Pause invalidates earlier timers. Resume restores the exact frozen remainder and schedules a new timer. Mutation-time `Date.now()` comes from Convex; clients supply no decision clock. Responses include server time for countdown offsets.
+
+State subscriptions include dynamic draft data and an import revision. A separate pool query subscribes to the imported pool document. Draft changes do not resend that pool. Import revisions come from stored completed imports, so warm clients and separate processes observe refreshes. Current lots also contain player data; missing pool entries retain safe UI fallbacks.
+
+Tables hold drafts, managers, pools, imports, lots, roster entries, passes, and append-only events. All public writes use the engine; no public reset, import, or event-edit function exists. Internal admin functions have narrow setup and recovery purposes. Test fixture functions are copied into isolated test backends only. The scheduler and transactions follow the [Convex mutation](https://docs.convex.dev/functions/mutation-functions), [scheduler](https://docs.convex.dev/scheduling/scheduled-functions), and [local testing](https://docs.convex.dev/testing/convex-backend) documentation.
 
 ## Data sources and gaps
 
-The explicit importer makes fifteen sequential public requests with a descriptive User-Agent and a small delay. Dry-run performs no database writes. With `EVIDENCE_DIR`, it saves a public response snapshot outside the repository. Snapshots and individual source caches store their original fetch time. Apply reuses them for less than 24 hours from that time; reuse never updates their age or file. This avoids a second players request. Without an evidence directory, each invocation fetches again. Sleeper asks callers to fetch the players endpoint at most once per day and stay below 1,000 calls per minute. Apply locks the draft and refuses after any lot exists or the state leaves setup. There is no override. All player updates and the import record commit together.
+The explicit importer makes fifteen sequential public requests with a descriptive User-Agent and a small delay. Dry-run performs no database writes. With `EVIDENCE_DIR`, it saves a public response snapshot outside the repository. Snapshots and individual source caches store their original fetch time. Apply reuses them for less than 24 hours from that time; reuse never updates their age or file. This avoids a second players request. Without an evidence directory, each invocation fetches again. Sleeper asks callers to fetch the players endpoint at most once per day and stay below 1,000 calls per minute. The internal import mutation refuses after any lot exists or the state leaves setup. There is no override. All player updates and the import record commit together.
 
 Sources:
 
@@ -101,9 +93,9 @@ Career games sum regular-season `gp`. A present record with absent or null `gp` 
 
 ## Identity
 
-The first device to claim a seat receives 256 random bits. The database stores only the SHA-256 hash. The browser receives an httpOnly SameSite=Lax cookie and keeps a token copy in localStorage for cookie recovery. Refresh and reconnect preserve identity. Actions derive the manager from the token; clients do not supply an acting manager ID. Release invalidates the previous token. The commissioner sees claimed seats and can release them. The release CLI provides recovery if the commissioner loses their device.
+The first device to claim a seat receives 256 random bits. The database stores only the SHA-256 hash. The browser keeps the token in localStorage and passes it explicitly to Convex identity queries and mutations. Refresh and reconnect preserve identity. Actions derive the manager from the token; clients do not supply an acting manager ID. Release invalidates the previous token. The commissioner sees claimed seats and can release them. The release CLI provides recovery if the commissioner loses their device.
 
-Anyone with the link can claim an unclaimed seat first. There is no authentication beyond possession of the seat token. Share the link with the league only. Browser storage is part of the trust model. Origin checks reject cross-origin writes.
+Anyone with the link can claim an unclaimed seat first. There is no authentication beyond possession of the seat token. Share the link with the league only. Browser storage is part of the trust model. Mutations require the seat token; they do not use ambient cookie authority.
 
 ## Sleeper references and league differences
 
@@ -119,7 +111,7 @@ One full-screen page; only panels scroll. Wide screens show the player pool, the
 
 ## Delivery boundaries
 
-No deployment, push or PR is part of this stage. Use `league:check` before starting the live draft. Verification data never enters the live schema.
+No deployment, push or PR is part of this stage. Use `league:check` before starting the live draft. Verification data never enters a cloud deployment.
 
 ## Compact-screen regression checks
 
