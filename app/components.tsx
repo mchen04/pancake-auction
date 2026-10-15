@@ -554,7 +554,9 @@ export function TeamsPanel({ state, me, busy, send }: RoomProps) {
                 <b>{manager.name}</b>
                 {status.text && <span className={`status ${status.tone}`}>{status.text}</span>}
                 {live && turnLabel !== '—' && (
-                  <span className="turn-inline">{turnLabel === 'Now' ? 'Nominating' : `Turn ${turnLabel}`}</span>
+                  <span className="turn-inline">
+                    {turnLabel !== 'Now' ? `Turn ${turnLabel}` : state.lot ? 'Nominated' : 'Nominating'}
+                  </span>
                 )}
               </span>
               <span className="num">{dollars(manager.budget)}</span>
