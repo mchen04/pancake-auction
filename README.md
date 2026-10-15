@@ -110,6 +110,10 @@ Sleeper does not document the maximum-bid formula. Its screenshots and completed
 
 The league PDF restricts taxi to drafted first-year rookies and disallows undrafted rookies. The card and group chat allow rookies or fewer than 65 career games. This app implements the card. The PDF names ESPN for positions. This app uses Sleeper positions, as requested.
 
+## Draft room
+
+One full-screen page; only panels scroll. Wide screens show the player pool, the auction block with the shot-clock timer, the Teams table (budget, max bid, roster counts, turn order) with Sales and Activity, and My roster side by side. At 1180 px and below, Players, My roster and Results move into tabs beside the block and Teams; at 860 px and below everything stacks under the block with four tabs, and the Players tab opens when your nomination turn starts. Player rows show positions, team, age, career games, projection, dynasty ADP, injury and taxi tags; a tap opens the projected stat line and the taxi and IR reasons. Unknown values show "?" in table cells and are spelled out in the lot line and details. The winner moves a player with one click to any legal group from the roster row or the win banner. Undo, Force end and seat release ask for a second click.
+
 ## Delivery boundaries
 
-The full-screen desktop page has independently scrolling pool, teams, sales, and roster panels. Narrow screens use horizontal panels. This is the functional first pass; a separate visual refinement follows. No deployment, push, PR, or commit is part of this build. The live league is configured with the confirmed names; use `league:check` before starting. Verification data never enters the live schema.
+No deployment, push or PR is part of this stage. Use `league:check` before starting the live draft. Verification data never enters the live schema.
