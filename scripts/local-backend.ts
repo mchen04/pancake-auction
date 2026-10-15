@@ -34,8 +34,8 @@ export async function stopProcess(child: ChildProcess, signal: NodeJS.Signals = 
     child.kill(signal);
     await stopped;
 }
-async function portListening(port: number) {
-    return new Promise<boolean>((resolve, reject) => {
+export async function portListening(port: number) {
+    return new Promise<boolean>(resolve => {
         const socket = createConnection({ host: '127.0.0.1', port });
         socket.once('connect', () => {
             socket.destroy();
@@ -43,10 +43,9 @@ async function portListening(port: number) {
         });
         socket.once('error', error => {
             socket.destroy();
-            if ('code' in error && error.code === 'ECONNREFUSED') resolve(false);
-            else reject(error);
+            resolve(!('code' in error && error.code === 'ECONNREFUSED'));
         });
-        socket.setTimeout(2000, () => { socket.destroy(); reject(new Error('Listener shutdown check timed out')); });
+        socket.setTimeout(2000, () => { socket.destroy(); resolve(true); });
     });
 }
 export async function requireClosedPort(port: number) {

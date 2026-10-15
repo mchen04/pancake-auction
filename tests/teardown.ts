@@ -1,22 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { writeFile } from 'node:fs/promises';
-import { createConnection, createServer } from 'node:net';
+import { createServer } from 'node:net';
 import { basename } from 'node:path';
-import { localBackend, requireClosedPort, sleep } from '../scripts/local-backend';
-
-function listening(port: number): Promise<boolean> {
-    return new Promise((resolve, reject) => {
-        const socket = createConnection({ host: '127.0.0.1', port });
-        socket.once('connect', () => { socket.destroy(); resolve(true); });
-        socket.once('error', error => {
-            socket.destroy();
-            if ('code' in error && error.code === 'ECONNREFUSED') resolve(false);
-            else reject(error);
-        });
-        socket.setTimeout(2000, () => { socket.destroy(); reject(new Error('Listener probe timed out')); });
-    });
-}
+import { localBackend, portListening as listening, requireClosedPort, sleep } from '../scripts/local-backend';
 async function delayedShutdownControl() {
     const server = createServer();
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
