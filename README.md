@@ -4,7 +4,7 @@ A single-page NBA dynasty startup auction for ten managers. Next.js renders the 
 
 ## Setup
 
-Use Node 24 or later. Install dependencies with `npm ci`. For this local phase, run `npm run backend:local` in one terminal. It starts Convex in anonymous mode, without a login, and isolates the CLI configuration under the ignored `.convex` directory. Keep that terminal running. The CLI writes local deployment state and the public frontend URL for Next.js.
+Use Node 24 or later. Install dependencies with `npm ci`. For this local phase, run `npm run backend:local` in one terminal. It starts Convex in anonymous mode, without a login, and isolates the CLI configuration under the ignored `.convex` directory. Keep that terminal running. The CLI writes local deployment state and the public frontend URL for Next.js. Restarts reuse the same local data. Ports default to 3210 and 3211; `CONVEX_LOCAL_CLOUD_PORT` and `CONVEX_LOCAL_SITE_PORT` can select different ports.
 
 Run `npm run league:managers`, then import the pool and run `npm run league:check`. `CONVEX_LOCAL_DIR` optionally selects a local deployment configuration directory. `CONVEX_URL` or `NEXT_PUBLIC_CONVEX_URL` selects the frontend's backend URL. `NEXT_DIST_DIR` optionally separates production builds. No cloud deployment or deploy key is required for verification.
 

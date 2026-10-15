@@ -19,6 +19,7 @@ async function main() {
         ["typecheck"],
         ["lint"],
         ["test"],
+        ["test:local"],
         ["test:db"],
         ["test:ui"],
         ["test:volume"],
