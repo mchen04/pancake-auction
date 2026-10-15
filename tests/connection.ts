@@ -108,24 +108,32 @@ async function main() {
         });
         const state = await getState();
         await act({ type: 'nominate', playerId: state.players[0].id, amount: 1 }, token);
-        await configure({ deadlineAfterMs: 120000 });
-        const clockError = async () => {
-            const value = await evaluate(`Math.abs(Number(document.querySelector('.shot-clock .digits')?.textContent)
-                - (${(await getState()).draft.deadline} - Date.now()) / 1000)`);
-            assert.equal(typeof value, 'number', 'The real countdown must exist');
-            assert(Number.isFinite(value));
-            return value as number;
+        const clockSample = async (selector = '.room .shot-clock .digits') => {
+            const sample = await evaluate(`(() => {
+                const displayed = document.querySelector(${JSON.stringify(selector)})?.textContent;
+                const remaining = (${(await getState()).draft.deadline} - Date.now()) / 1000;
+                return { displayed, remaining, errorSeconds: Math.abs(Number(displayed) - remaining) };
+            })()`);
+            assert(Number.isFinite(sample.errorSeconds), 'The real countdown must exist');
+            assert(sample.remaining > 0 && sample.remaining < 10, 'The deadline must test sub-second rendering');
+            return sample;
         };
         await check('Fresh clock negative control matches the real remaining time', async () => {
+            await configure({ deadlineAfterMs: 9000 });
             await open('healthy');
             await browser('wait', '.bid-controls');
-            assert(await clockError() < 1.2);
+            const sample = await clockSample();
+            assert.match(sample.displayed, /^\d+\.\d$/);
+            assert(sample.errorSeconds <= 0.3);
         });
         await check('Stale cached query time cannot change the countdown on mount or reconnect', async () => {
+            await configure({ deadlineAfterMs: 9000 });
             await open('stale');
             await browser('wait', '.bid-controls');
             await sleep(700);
-            assert(await clockError() < 1.2, 'Mount must synchronize an uncached mutation timestamp');
+            const mounted = await clockSample();
+            assert.match(mounted.displayed, /^\d+\.\d$/);
+            assert(mounted.errorSeconds <= 0.3, 'Mount must synchronize within 0.3 seconds');
             const calls = await evaluate('window.transport.syncCalls');
             assert(calls >= 1);
             const before = await getState();
@@ -134,10 +142,20 @@ async function main() {
             await sleep(500);
             const after = await getState();
             assert.equal(after.recentEvents[0].id, before.recentEvents[0].id, 'Reconnect makes no draft write');
-            assert(await clockError() < 1.2);
+            const samples = [];
+            for (let index = 0; index < 3; index++) {
+                const sample = await clockSample();
+                assert.match(sample.displayed, /^\d+\.\d$/);
+                assert(sample.errorSeconds <= 0.3, 'Reconnect must synchronize within 0.3 seconds');
+                samples.push(sample);
+                await sleep(120);
+            }
+            const cachedOffsetControl = await clockSample('.legacy-clock .digits');
+            assert(cachedOffsetControl.errorSeconds > 59, 'The cached-offset control must fail the same tolerance');
             await writeFile(`${dir}/clock.json`, JSON.stringify({ staleQueryTime: await evaluate(
                 'window.transport.cachedTimes.at(-1)'), syncCalls: await evaluate('window.transport.syncCalls'),
-                errorSeconds: await clockError(), noDraftWrites: true }, null, 2));
+                toleranceSeconds: 0.3, mounted, reconnected: samples, cachedOffsetControl,
+                noDraftWrites: true }, null, 2));
         });
         const otherToken = await claimSeat(2);
         await act({ type: 'bid', lotId: (await getState()).lot!.id, amount: 2 }, otherToken);

@@ -1,5 +1,9 @@
 import { createRoot } from 'react-dom/client';
+import { useEffect, useState } from 'react';
+import { useQuery } from 'convex/react';
 import { AuctionProvider } from '../app/provider';
+import { ShotClock } from '../app/components';
+import { api } from '../convex/_generated/api';
 import Room from '../app/page';
 
 const NativeSocket = window.WebSocket;
@@ -82,4 +86,12 @@ class ControlledSocket extends EventTarget {
     }
 }
 window.WebSocket = ControlledSocket as unknown as typeof WebSocket;
-createRoot(document.getElementById('root')!).render(<AuctionProvider url={config.url}><Room /></AuctionProvider>);
+function CachedClockControl() {
+    const snapshot = useQuery(api.auction.state, { token: config.token });
+    const [offset, setOffset] = useState(0);
+    useEffect(() => { if (snapshot) setOffset(snapshot.serverNow - Date.now()); }, [snapshot]);
+    return snapshot && <div className="legacy-clock"><ShotClock draft={snapshot.draft} offset={offset} /></div>;
+}
+createRoot(document.getElementById('root')!).render(<AuctionProvider url={config.url}>
+    <Room />{mode === 'stale' && <CachedClockControl />}
+</AuctionProvider>);
