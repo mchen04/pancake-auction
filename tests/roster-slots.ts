@@ -294,7 +294,7 @@ async function main() {
     }
     async function panelWidths(width: number, label: string) {
         const layouts: { expanded: boolean; tab: string; panels: {
-            name: string; scrollWidth: number; clientWidth: number; overflowX: string }[] }[] = [];
+            name: string; scrollWidth: number; clientWidth: number; height: number; overflowX: string }[] }[] = [];
         for (const expanded of [false, true]) {
             if (width <= 860) await tab('Teams');
             if (expanded) await inspectTeam(2);
@@ -303,12 +303,12 @@ async function main() {
             for (const selected of tabs) {
                 if (selected !== 'All') await tab(selected);
                 const panels = await evaluate<(typeof layouts)[number]['panels']>(`(() => {
-                    const visible=element=>{const r=element.getBoundingClientRect();return r.width>0&&r.height>0;};
+                    const visible=element=>element.getBoundingClientRect().width>0;
                     return [...document.querySelectorAll('.panel .scroll,.team-roster')]
                         .filter(visible).map(element=>({name:element.classList.contains('team-roster')
                             ?'inspected roster':element.closest('.panel').getAttribute('aria-label'),
                             scrollWidth:element.scrollWidth,clientWidth:element.clientWidth,
-                            overflowX:getComputedStyle(element).overflowX}));
+                            height:element.getBoundingClientRect().height,overflowX:getComputedStyle(element).overflowX}));
                 })()`);
                 layouts.push({ expanded, tab: selected, panels });
                 if ((selected === 'Teams' || selected === 'All') && (width <= 390 || width === 1440)) {
