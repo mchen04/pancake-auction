@@ -141,6 +141,18 @@ async function event(client: PoolClient, type: string, managerId: number | null,
 function team(s: AuctionState, id: number) {
     return s.roster.filter(e => e.managerId === id);
 }
+async function resumeRequiredNominations(client: PoolClient, s: AuctionState, lotId: number | null, now: number) {
+    for (const manager of s.managers) {
+        if (!manager.done || counts(team(s, manager.id)).active === 20) continue;
+        manager.done = false;
+        s.draft.passedTurns = s.draft.passedTurns.filter(id => id !== manager.id);
+        await client.query("UPDATE managers SET done=false WHERE id=$1", [manager.id]);
+        await event(client, "done", manager.id, lotId, {
+            done: false,
+            reason: "active-spot-opened"
+        }, now);
+    }
+}
 function available(s: AuctionState) {
     const sold = new Set(s.roster.map(e => e.playerId));
     return s.players.filter(p => !sold.has(p.id));
@@ -478,6 +490,11 @@ export async function act(action: Action, token?: string) {
             await client.query("UPDATE lots SET status='undone' WHERE id=$1", [undone.id]);
             await client.query("UPDATE managers SET budget=budget+$1 WHERE id=$2", [undone.highBid,
                 undone.highBidderId]);
+            s.roster = s.roster.filter(entry => entry.lotId !== undone.id);
+            const winner = s.managers.find(manager => manager.id === undone.highBidderId)!;
+            winner.budget += undone.highBid;
+            await resumeRequiredNominations(client, s, undone.id, now);
+            s.managers.find(manager => manager.id === undone.nominatorId)!.done = false;
             await client.query("UPDATE managers SET done=false WHERE id=$1", [undone.nominatorId]);
             d.passedTurns = [];
             d.completionReason = null;
@@ -554,15 +571,17 @@ export async function act(action: Action, token?: string) {
                 }
             }
             await client.query("UPDATE roster SET placement=$1 WHERE player_id=$2", [action.placement, player.id]);
-            await event(client, "placement", m.id, entry.lotId, {
-                playerId: player.id,
-                from: entry.placement,
-                to: action.placement
-            }, now);
-            if (entry.placement !== action.placement) {
+            const previous = entry.placement;
+            if (previous !== action.placement) {
                 d.passedTurns = d.passedTurns.filter(id => id !== m.id);
             }
             entry.placement = action.placement;
+            await resumeRequiredNominations(client, s, entry.lotId, now);
+            await event(client, "placement", m.id, entry.lotId, {
+                playerId: player.id,
+                from: previous,
+                to: action.placement
+            }, now);
             if (d.status === "running") {
                 await advance(client, s, now);
             }

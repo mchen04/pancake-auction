@@ -399,6 +399,15 @@ export class Replay {
                 break;
             }
         }
+        for (const manager of this.done) {
+            assert.equal(this.count(this.team(manager), "active"), 20,
+                `Done manager ${manager} has an open active spot at event ${event.id}`);
+        }
+        if (this.complete) {
+            assert(!this.managerIds.some(manager => this.count(this.team(manager), "active") < 20
+                && this.available().some(player => this.maximum(manager, player) >= 1)),
+            `Draft completes with a legal required nomination at event ${event.id}`);
+        }
     }
 }
 export async function auditDraft(requireFull = true) {
@@ -484,7 +493,9 @@ export async function auditDraft(requireFull = true) {
             forceEndHighBid: true,
             databaseMatchesReplay: true,
             fullActiveRosters: requireFull,
-            noBidExceededIndependentMax: true
+            noBidExceededIndependentMax: true,
+            doneRequiresFullActiveAtEveryEvent: true,
+            noPrematureRequiredCompletion: true
         }
     };
 }

@@ -76,4 +76,29 @@ describe('competitive simulation', () => {
         expect(replay.acceptedBids).toBe(1);
         expect(replay.maxBidHits).toBe(1);
     });
+    it('C12/C15 replay rejects Done with an open active spot after every event', () => {
+        const room = state();
+        const replay = new Replay(room.players, [1]);
+        replay.roster = room.players.slice(0, 20).map((player, index) => ({
+            playerId: player.id, managerId: 1, placement: 'active', price: 1, lotId: index + 1
+        }));
+        replay.done.add(1);
+        expect(() => replay.apply({
+            id: '1', type: 'placement', manager_id: 1, lot_id: 1, created_at: new Date(1000),
+            data: { now: 1000, playerId: room.players[0].id, from: 'active', to: 'taxi' }
+        })).toThrow(/Done manager 1 has an open active spot/);
+    });
+    it('C12/C15 replay rejects completion with a legal required nomination', () => {
+        const room = state();
+        const replay = new Replay(room.players, [1]);
+        replay.roster = room.players.slice(0, 19).map((player, index) => ({
+            playerId: player.id, managerId: 1, placement: 'active', price: 1, lotId: index + 1
+        }));
+        replay.passedTurns.add(1);
+        expect(() => replay.apply({
+            id: '1', type: 'complete', manager_id: null, lot_id: null, created_at: new Date(1000),
+            data: { now: 1000, reason: 'full-cycle-passed', passedTurns: [1] }
+        })).toThrow(/Draft completes with a legal required nomination/);
+    });
+
 });
