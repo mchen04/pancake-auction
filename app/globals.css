@@ -1258,10 +1258,11 @@ input {
     grid-template-columns: minmax(0, 1fr) 46px 46px 42px 32px 26px 34px;
   }
   .team-grid.with-admin {
-    grid-template-columns: minmax(0, 1fr) 44px 44px 40px 30px 26px 60px;
+    grid-template-columns: minmax(0, 1fr) 42px 42px 40px 30px 26px 56px;
+    column-gap: 4px;
   }
   .team-grid.with-turn.with-admin {
-    grid-template-columns: minmax(0, 1fr) 44px 44px 40px 30px 26px 0 60px;
+    grid-template-columns: minmax(0, 1fr) 42px 42px 40px 30px 26px 0 56px;
   }
   .team-grid.with-turn.with-admin > :nth-child(7) {
     visibility: hidden;

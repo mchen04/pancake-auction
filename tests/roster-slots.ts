@@ -162,7 +162,8 @@ async function main() {
     await mkdir(evidence, { recursive: true });
     const isolated = await createIsolated('test');
     await seedManagers(); await seedPlayers(players);
-    const token = await claimSeat(1); await claimSeat(2);
+    const token = await claimSeat(1), memberToken = await claimSeat(2);
+    let viewerToken = token;
     await build({ entryPoints: ['tests/layout-harness.tsx'], outfile: `${evidence}/bundle.js`, bundle: true,
         platform: 'browser', format: 'esm', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' } });
     let fontCss = '';
@@ -178,7 +179,7 @@ async function main() {
         const path = new URL(request.url!, 'http://localhost').pathname;
         if (path === '/client-config.json') {
             response.setHeader('Content-Type', 'application/json');
-            response.end(JSON.stringify({ url: currentBackend().url, token }));
+            response.end(JSON.stringify({ url: currentBackend().url, token: viewerToken }));
         } else if (path === '/style.css') { response.setHeader('Content-Type', 'text/css'); response.end(css); }
         else if (path.endsWith('.woff2')) {
             response.setHeader('Content-Type', 'font/woff2');
@@ -236,7 +237,77 @@ async function main() {
             assert(Math.abs(edge - proof.header[index][side]) < 1, 'Team columns must align with their headers');
         }));
     }
+    async function teamNames() {
+        return evaluate<{
+            names: { name: string; clientWidth: number; scrollWidth: number; gap: number;
+                cueVisible: boolean; buttonFits: boolean; aligned: boolean }[];
+            admin: boolean; turn: boolean; gutter: number; document: number[]; viewport: number[];
+        }>(`(() => {
+            const scroll=document.querySelector('.teams .scroll');
+            const header=document.querySelector('.teams .table-head');
+            const names=[...document.querySelectorAll('.team-inspect')].map(button=>{
+                const row=button.closest('.team-row'),r=row.getBoundingClientRect(),s=scroll.getBoundingClientRect();
+                scroll.scrollTop+=r.top-s.top-(scroll.clientHeight-r.height)/2;
+                const name=button.querySelector('.team-inspect-name'),cue=button.querySelector('.team-inspect-cue');
+                const n=name.getBoundingClientRect(),c=cue.getBoundingClientRect(),b=button.getBoundingClientRect();
+                const cell=button.closest('.team-name').getBoundingClientRect(),v=scroll.getBoundingClientRect();
+                return {name:name.textContent,clientWidth:name.clientWidth,scrollWidth:name.scrollWidth,
+                    gap:c.left-n.right,cueVisible:c.width>0&&c.height>0&&c.top>=v.top&&c.bottom<=v.bottom
+                        &&c.left>=b.left&&c.right<=b.right,
+                    buttonFits:b.left>=cell.left&&b.right<=cell.right,
+                    aligned:[...row.children].every((child,index)=>{
+                        const a=child.getBoundingClientRect(),h=header.children[index].getBoundingClientRect();
+                        return Math.abs(a.left-h.left)<1&&Math.abs(a.right-h.right)<1;})};
+            });
+            return {names,admin:header.classList.contains('with-admin'),turn:header.classList.contains('with-turn'),
+                gutter:scroll.offsetWidth-scroll.clientWidth,
+                document:[document.documentElement.scrollWidth,document.documentElement.scrollHeight],
+                viewport:[innerWidth,innerHeight]};
+        })()`);
+    }
     try {
+        const nameViewports = [[1180,768],[1181,768],[1200,768],[1219,768],[1220,768],
+            [1280,720],[1440,900],[1024,768],[390,844],[390,667]];
+        for (const [width, height] of nameViewports) {
+            for (const commissioner of [true, false]) {
+                for (const live of [true, false]) {
+                    const role = commissioner ? 'commissioner' : 'member', phase = live ? 'live' : 'setup';
+                    const label = `${width}x${height}-${role}-${phase}`;
+                    await check(`${label} team names stay complete beside their cues`, async () => {
+                        viewerToken = commissioner ? token : memberToken;
+                        const state = await seed('partial');
+                        if (!live) await configure({ draft: { status: 'setup', phase: 'nomination',
+                            lotId: null, nominatorId: null, deadline: null, remainingMs: null } });
+                        await browser('set', 'viewport', String(width), String(height)); await open();
+                        if (width <= 860) await tab('Teams');
+                        const normal = await teamNames();
+                        await evaluate(`(() => {
+                            const style=document.createElement('style');
+                            style.textContent='.teams .scroll{scrollbar-width:auto;scrollbar-gutter:stable}'
+                                +'.teams .scroll::-webkit-scrollbar{width:15px}';
+                            document.head.append(style);return true;})()`);
+                        const reserved = await teamNames();
+                        const proof = { normal, reserved };
+                        await writeFile(`${evidence}/${label}-team-names.json`, JSON.stringify(proof,null,2));
+                        await browser('scroll', 'up', '2000', '--selector', '.teams .scroll');
+                        await browser('screenshot', `${evidence}/${label}-team-names.png`);
+                        assert(reserved.gutter >= 15, 'The scrollbar control must reserve real browser space');
+                        for (const layout of [normal, reserved]) {
+                            assert.equal(layout.admin, commissioner); assert.equal(layout.turn, live);
+                            assert.deepEqual(layout.names.map(row => row.name), state.managers.map(row => row.name));
+                            assert(layout.document[0] <= width && layout.document[1] <= height);
+                            for (const name of layout.names) {
+                                assert(name.scrollWidth <= name.clientWidth, `${name.name} must not truncate`);
+                                assert(name.gap >= 0 && name.gap <= 5, `${name.name}'s cue must stay beside its name`);
+                                assert(name.cueVisible && name.buttonFits && name.aligned);
+                            }
+                        }
+                        return proof;
+                    });
+                }
+            }
+        }
+        viewerToken = token;
         for (const [width, height] of [[1440,900],[390,844]]) {
             await check(`${width}x${height} team disclosure is visible without hover and follows inspection`, async () => {
                 await browser('set', 'viewport', String(width), String(height));
