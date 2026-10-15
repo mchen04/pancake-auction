@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { ConvexHttpClient } from 'convex/browser';
 import { makeFunctionReference } from 'convex/server';
@@ -22,7 +22,9 @@ async function main() {
     const proof: Record<string, unknown> = { name: 'Documented local command serves and preserves data after restart',
         port, sitePort, result: 'failed' };
     let child: ChildProcess | undefined;
+    let frontend: ChildProcess | undefined;
     let log = '';
+    let frontendLog = '';
     const stop = async () => {
         if (child && child.exitCode === null && child.signalCode === null) {
             const exited = new Promise(resolve => child!.once('exit', resolve));
@@ -45,8 +47,11 @@ async function main() {
     };
     const previousDirectory = process.env.CONVEX_LOCAL_DIR;
     try {
-        for (const name of ['convex', 'lib', 'scripts', 'league']) {
+        for (const name of ['app', 'convex', 'lib', 'scripts', 'league']) {
             await cp(resolve(name), `${directory}/${name}`, { recursive: true });
+        }
+        for (const name of ['next.config.ts', 'tsconfig.json', 'next-env.d.ts']) {
+            await cp(name, `${directory}/${name}`);
         }
         await cp('package.json', `${directory}/package.json`);
         await symlink(resolve('node_modules'), `${directory}/node_modules`, 'dir');
@@ -57,9 +62,27 @@ async function main() {
         await start();
         assert.equal((await client.query(api.auction.state, {})).managers.length, 0);
         proof.freshDataControl = true;
-        const frontend = await readFile(`${directory}/.env.local`, 'utf8');
-        assert(frontend.includes(`NEXT_PUBLIC_CONVEX_URL=http://127.0.0.1:${port}`));
+        assert((await stat(`${directory}/.env.local`)).size > 0);
+        const frontendPort = await freePort();
+        proof.frontendPort = frontendPort;
+        frontend = spawn('npm', ['run', 'dev', '--', '--webpack', '--port', String(frontendPort)],
+            { cwd: directory, detached: true, env: { PATH: process.env.PATH, NODE_ENV: 'development' },
+                stdio: ['ignore', 'pipe', 'pipe'] });
+        frontend.stdout!.on('data', data => { frontendLog += String(data); });
+        frontend.stderr!.on('data', data => { frontendLog += String(data); });
+        let frontendLoadedUrl = false;
+        for (let attempt = 0; attempt < 120; attempt++) {
+            if (frontend.exitCode !== null) throw new Error('The documented Next command exited');
+            try {
+                const response = await fetch(`http://127.0.0.1:${frontendPort}`);
+                frontendLoadedUrl = response.ok && (await response.text()).includes(`http://127.0.0.1:${port}`);
+            } catch {}
+            if (frontendLoadedUrl) break;
+            await sleep(250);
+        }
+        assert(frontendLoadedUrl, 'Next must load the generated frontend URL without an injected URL');
         proof.frontendUrlWritten = true;
+        proof.nextLoadedGeneratedUrl = true;
         process.env.CONVEX_LOCAL_DIR = `${directory}/.convex/local/default`;
         await runAdmin('admin:managers');
         const claimed = await client.mutation(api.auction.claimSeat, { managerId: 1 });
@@ -81,11 +104,18 @@ async function main() {
     } finally {
         if (previousDirectory === undefined) delete process.env.CONVEX_LOCAL_DIR;
         else process.env.CONVEX_LOCAL_DIR = previousDirectory;
+        if (frontend && frontend.exitCode === null && frontend.signalCode === null) {
+            const exited = new Promise(resolve => frontend!.once('exit', resolve));
+            process.kill(-frontend.pid!, 'SIGTERM');
+            await exited;
+            await requireClosedPort(proof.frontendPort as number);
+        }
         await stop();
         proof.nativePortsClosed = true;
         await rm(directory, { recursive: true, force: true });
         proof.directoryRemoved = true;
         await writeFile(`${root}/local-workflow.log`, log);
+        await writeFile(`${root}/local-frontend.log`, frontendLog);
         await writeFile(`${root}/local-workflow.json`, JSON.stringify(proof, null, 2));
     }
 }
