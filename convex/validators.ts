@@ -3,13 +3,13 @@ export const placement = v.union(v.literal('active'), v.literal('taxi'), v.liter
 export const action = v.union(
     v.object({ type: v.literal('start') }), v.object({ type: v.literal('pause') }),
     v.object({ type: v.literal('resume') }), v.object({ type: v.literal('undo'), lotId: v.number() }),
-    v.object({ type: v.literal('done'), done: v.boolean(), nominationGeneration: v.string() }),
+    v.object({ type: v.literal('done'), done: v.boolean(), nominationGeneration: v.optional(v.string()) }),
     v.object({ type: v.literal('nominate'), playerId: v.string(), amount: v.number(),
-        nominationGeneration: v.string() }),
+        nominationGeneration: v.optional(v.string()) }),
     v.object({ type: v.literal('bid'), lotId: v.number(), amount: v.number() }),
     v.object({ type: v.literal('pass'), lotId: v.number() }),
     v.object({ type: v.literal('force'), lotId: v.number(),
-        expectedHighBidderId: v.number(), expectedHighBid: v.number() }),
+        expectedHighBidderId: v.optional(v.number()), expectedHighBid: v.optional(v.number()) }),
     v.object({ type: v.literal('place'), playerId: v.string(), placement }),
     v.object({ type: v.literal('release'), managerId: v.number() })
 );

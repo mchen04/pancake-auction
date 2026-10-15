@@ -1,8 +1,12 @@
 import { canNominate, counts, legalPlacements, maxBid, nextDeadline, placementMax, timeoutNominee } from '../lib/rules';
-import type { Action, AuctionState, Draft, Entry, Lot, Manager, Player } from '../lib/types';
+import type { AuctionState, Draft, Entry, Lot, Manager, Player } from '../lib/types';
+import type { Infer } from 'convex/values';
+import { action as actionValidator } from './validators';
 import type { MutationCtx, QueryCtx } from './_generated/server';
 import type { Doc } from './_generated/dataModel';
 import { internal } from './_generated/api';
+
+type WireAction = Infer<typeof actionValidator>;
 
 export class RuleError extends Error {
     constructor(message: string, public status = 422) { super(message); }
@@ -116,7 +120,6 @@ async function resumeRequiredNominations(client: Store, s: AuctionState, lotId: 
     for (const manager of s.managers) {
         if (!manager.done || counts(team(s, manager.id)).active === 20) continue;
         manager.done = false;
-        if (s.draft.phase === 'nomination') client.renewNomination(s);
         s.draft.passedTurns = s.draft.passedTurns.filter(id => id !== manager.id);
         
         await event(client, "done", manager.id, lotId, {
@@ -296,15 +299,17 @@ async function advance(client: Store, s: AuctionState, now: number) {
 }
 
 export async function transaction<T>(ctx: MutationCtx, token: string | undefined,
-    run: (client: Store, state: AuctionState, now: number) => Promise<T>) {
+    run: (client: Store, state: AuctionState, now: number) => Promise<T>,
+    validate?: (state: AuctionState) => void) {
     const record = await draftRecord(ctx);
     if (!record) return { ok: false as const, error: 'League managers are not configured',
         status: 409, serverNow: Date.now() };
     const store = new Store(ctx, record);
     const state = await load(ctx, token, true, false);
     const now = Date.now();
-    await advance(store, state, now);
     try {
+        validate?.(state);
+        await advance(store, state, now);
         const value = await run(store, state, now);
         await store.save(state);
         return { ok: true as const, value: value ?? null, serverNow: now };
@@ -314,7 +319,18 @@ export async function transaction<T>(ctx: MutationCtx, token: string | undefined
         return { ok: false as const, error: error.message, status: error.status, serverNow: now };
     }
 }
-export async function act(ctx: MutationCtx, action: Action, token: string) {
+function turnBound(action: WireAction, s: AuctionState) {
+    return action.type === 'nominate' || action.type === 'done'
+        && s.draft.phase === 'nomination' && s.draft.nominatorId === s.me;
+}
+function requireCurrentPage(action: WireAction, s: AuctionState) {
+    const missingGeneration = (action.type === 'nominate' || action.type === 'done')
+        && turnBound(action, s) && action.nominationGeneration === undefined;
+    const missingForceTarget = action.type === 'force'
+        && (action.expectedHighBidderId === undefined || action.expectedHighBid === undefined);
+    if (missingGeneration || missingForceTarget) throw new RuleError('Refresh the page to continue', 409);
+}
+export async function act(ctx: MutationCtx, action: WireAction, token: string) {
     return transaction(ctx, token, async (client, s, now) => {
         const m = s.managers.find(m => m.id === s.me);
         if (!m) {
@@ -491,7 +507,8 @@ export async function act(ctx: MutationCtx, action: Action, token: string) {
         if (d.status !== "running" && action.type !== "force") {
             throw new RuleError("Draft is paused", 409);
         }
-        if ((action.type === 'nominate' || action.type === 'done')
+        requireCurrentPage(action, s);
+        if ((action.type === 'nominate' || action.type === 'done') && turnBound(action, s)
             && action.nominationGeneration !== d.nominationGeneration) {
             throw new RuleError('That nomination turn has ended', 409);
         }
@@ -590,7 +607,7 @@ export async function act(ctx: MutationCtx, action: Action, token: string) {
             await award(client, s, "all-out", now);
         }
 
-    });
+    }, s => requireCurrentPage(action, s));
 }
 export async function claim(ctx: MutationCtx, managerId: number) {
     return transaction(ctx, undefined, async (store, s, now) => {
