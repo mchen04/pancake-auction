@@ -1,0 +1,389 @@
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { createServer } from 'node:http';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { basename, resolve } from 'node:path';
+import { promisify } from 'node:util';
+import { matching, slots, taxiEligibility } from '../lib/rules';
+import type { AuctionState, Entry, Player } from '../lib/types';
+import { requireClosedPort } from '../scripts/local-backend';
+import { act, claimSeat, configure, createIsolated, currentBackend, dropIsolated, getState,
+    seedManagers, seedPlayers, sleep } from './support';
+import recorded from './fixtures/sleeper-pool.json';
+
+const execute = promisify(execFile);
+const require = createRequire(resolve('package.json'));
+const { build }: typeof import('esbuild') = require('esbuild');
+const session = `pancake-roster-slots-${crypto.randomUUID()}`;
+const players = recorded.players as Player[];
+const target = players.find(player => player.name === 'Giannis Antetokounmpo')!;
+const freshPlayer = players.find(player => player.injuryStatus === 'Out' && taxiEligibility(player) === 'eligible')!;
+const mover = players.find(player => player.id !== freshPlayer.id && player.injuryStatus === 'Out'
+    && taxiEligibility(player) === 'eligible')!;
+const capacities = { Starters: 10, Bench: 10, Taxi: 3, IR: 2 };
+const results: { name: string; result: string; proof?: unknown; error?: string }[] = [];
+async function browser(...args: string[]) {
+    return (await execute('agent-browser', ['--session', session, ...args], { timeout: 20000 })).stdout.trim();
+}
+async function evaluate<T>(expression: string): Promise<T> { return JSON.parse(await browser('eval', expression)); }
+async function until(expression: string) {
+    for (let attempt = 0; attempt < 60; attempt++) {
+        if (await evaluate<boolean>(expression)) return;
+        await sleep(50);
+    }
+    throw new Error(`Browser condition failed: ${expression}`);
+}
+async function check(name: string, run: () => Promise<unknown>) {
+    const only = process.argv.find(arg => arg.startsWith('--only='))?.slice(7);
+    if (only && !name.includes(only)) return;
+    try { const proof = await run(); results.push({ name, result: 'passed', proof }); console.log(`PASS ${name}`); }
+    catch (error) { results.push({ name, result: 'failed', error: String(error) }); console.log(`FAIL ${name}: ${error}`); }
+}
+function roster(mode: 'empty' | 'partial' | 'full') {
+    if (mode === 'empty') return [];
+    const used = new Set([target.id, freshPlayer.id, mover.id]);
+    const entries: Entry[] = [];
+    function add(player: Player, managerId: number, placement: Entry['placement']) {
+        used.add(player.id);
+        entries.push({ playerId: player.id, managerId, placement, lotId: entries.length + 1, price: 1 });
+    }
+    function pick(predicate: (player: Player) => boolean) {
+        const player = players.find(player => !used.has(player.id) && predicate(player));
+        assert(player); return player;
+    }
+    for (const managerId of [1, 2]) {
+        const active = mode === 'full' ? 20 : 12;
+        if (managerId === 1) add(mover, managerId, 'active');
+        for (let index = managerId === 1 ? 1 : 0; index < active; index++) {
+            const position = (['PG', 'SG', 'SF', 'PF', 'C'] as const)[index % 5];
+            add(pick(player => player.positions.includes(position)), managerId, 'active');
+        }
+        assert(matching(entries.filter(entry => entry.managerId === managerId).map(entry =>
+            players.find(player => player.id === entry.playerId)!)));
+        for (let index = 0; index < (mode === 'full' ? 3 : 1); index++) {
+            add(pick(player => taxiEligibility(player) === 'eligible'), managerId, 'taxi');
+        }
+        for (let index = 0; index < (mode === 'full' ? 2 : 1); index++) {
+            add(pick(player => player.injuryStatus === 'Out'), managerId, 'ir');
+        }
+    }
+    return entries;
+}
+async function seed(mode: 'empty' | 'partial' | 'full') {
+    const entries = roster(mode);
+    const id = entries.length + 1;
+    await configure({ roster: entries, managers: [1,2].map(managerId => ({ id: managerId, done: false,
+        budget: 1000 - entries.filter(entry => entry.managerId === managerId).length })),
+        lot: { id, playerId: target.id, nominatorId: 3, highBidderId: 3, highBid: 10, status: 'open' },
+        draft: { status: 'paused', phase: 'bidding', order: [1,2,3,4,5,6,7,8,9,10], nominatorId: 3,
+            turnIndex: 2, lotId: id, deadline: null, remainingMs: 10000, passedTurns: [] } });
+    return getState();
+}
+function expected(state: AuctionState, managerId: number) {
+    const entries = state.roster.filter(entry => entry.managerId === managerId);
+    const active = entries.filter(entry => entry.placement === 'active');
+    const assignment = matching(active.map(entry => players.find(player => player.id === entry.playerId)!));
+    assert(assignment);
+    return {
+        Starters: assignment.slice(0,10).map(index => active[index]?.playerId ?? null),
+        Bench: [...assignment.slice(10).filter(index => index >= 0).map(index => active[index].playerId),
+            ...Array(10).fill(null)].slice(0,10),
+        Taxi: [...entries.filter(entry => entry.placement === 'taxi').map(entry => entry.playerId),
+            null, null, null].slice(0,3),
+        IR: [...entries.filter(entry => entry.placement === 'ir').map(entry => entry.playerId), null, null].slice(0,2)
+    };
+}
+const measure = (selector: string) => `(() => {
+    const panel=document.querySelector(${JSON.stringify(selector)});
+    if(!panel)return {missing:true};
+    const scroll=panel.closest('.panel').querySelector('.scroll');
+    const visible=el=>{const r=el.getBoundingClientRect();const s=scroll.getBoundingClientRect();
+        return r.height>0&&r.top>=s.top-1&&r.bottom<=s.bottom+1&&r.left>=-1&&r.right<=innerWidth+1;};
+    const groups={};
+    for(const heading of panel.querySelectorAll('h3')) {
+        const name=heading.firstChild.textContent.trim();const rows=[];
+        for(let row=heading.nextElementSibling;row&&row.tagName!=='H3';row=row.nextElementSibling) {
+            if(!row.classList.contains('roster-row'))continue;
+            const r=row.getBoundingClientRect();const s=scroll.getBoundingClientRect();
+            scroll.scrollTop+=r.top-s.top-(scroll.clientHeight-r.height)/2;
+            rows.push({label:row.getAttribute('aria-label'),role:row.getAttribute('role'),
+                open:row.classList.contains('open'),name:row.querySelector('strong')?.textContent,
+                code:row.querySelector('.slot')?.textContent,reachable:visible(row),
+                interactive:!!row.querySelector('button,a,input,select,textarea,[tabindex]'),
+                tabIndex:row.tabIndex,cursor:getComputedStyle(row).cursor,rect:row.getBoundingClientRect().toJSON()});
+        }
+        groups[name]=rows;
+    }
+    return {groups,document:[document.documentElement.scrollWidth,document.documentElement.scrollHeight],
+        viewport:[innerWidth,innerHeight],scrollY,scrollX,panelHeight:scroll.clientHeight,
+        scrollHeight:scroll.scrollHeight,overflowY:getComputedStyle(scroll).overflowY,
+        placementButtons:panel.querySelectorAll('.placement button').length};
+})()`;
+type Row = { label: string; role: string; open: boolean; name?: string; code: string;
+    reachable: boolean; interactive: boolean; tabIndex: number; cursor: string };
+type Measurements = { groups: Record<string, Row[]>; document: number[]; viewport: number[];
+    scrollX: number; scrollY: number; panelHeight: number; scrollHeight: number; overflowY: string; placementButtons: number };
+function frame(proof: Measurements) {
+    assert(proof.document[0] <= proof.viewport[0] && proof.document[1] <= proof.viewport[1], 'Document overflow');
+    assert.equal(proof.scrollX, 0); assert.equal(proof.scrollY, 0);
+    assert(proof.panelHeight >= 100, 'The selected panel must keep usable scroll space');
+    if (proof.scrollHeight > proof.panelHeight + 1) {
+        assert(['auto','scroll'].includes(proof.overflowY), 'The panel must permit user scrolling');
+    }
+}
+function assertSlots(proof: Measurements, state: AuctionState, managerId: number, readOnly: boolean) {
+    const assigned = expected(state, managerId);
+    frame(proof);
+    for (const [group, capacity] of Object.entries(capacities)) {
+        assert.equal((proof.groups[group] ?? []).length, capacity, `${group} must render ${capacity} individual slots`);
+    }
+    for (const [group, capacity] of Object.entries(capacities)) {
+        const rows = proof.groups[group];
+        const ids = assigned[group as keyof typeof assigned];
+        assert.equal(rows.filter(row => row.open).length, ids.filter(id => id === null).length);
+        rows.forEach((row, index) => {
+            const name = players.find(player => player.id === ids[index])?.name;
+            assert.equal(row.name, name);
+            assert.equal(row.role, 'group');
+            const position = group === 'Starters' ? slots[index] : group;
+            assert.equal(row.label, `${position} spot ${index + 1} of ${capacity}, ${name ?? 'open'}`);
+            assert.equal(row.code, group === 'Starters' ? slots[index] : { Bench: 'BN', Taxi: 'TX', IR: 'IR' }[group]);
+            assert(row.reachable, `${row.label} must be reachable by panel scrolling`);
+            if (row.open) {
+                assert(!row.interactive); assert.equal(row.tabIndex, -1); assert.notEqual(row.cursor, 'pointer');
+            }
+        });
+    }
+    if (readOnly) assert.equal(proof.placementButtons, 0);
+}
+async function main() {
+    const evidence = `${process.env.EVIDENCE_DIR}/roster-slots`;
+    await mkdir(evidence, { recursive: true });
+    const isolated = await createIsolated('test');
+    await seedManagers(); await seedPlayers(players);
+    const token = await claimSeat(1); await claimSeat(2);
+    await build({ entryPoints: ['tests/layout-harness.tsx'], outfile: `${evidence}/bundle.js`, bundle: true,
+        platform: 'browser', format: 'esm', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' } });
+    let fontCss = '';
+    try {
+        const files = await readdir('.next/static/chunks');
+        const styles = await Promise.all(files.filter(file => file.endsWith('.css'))
+            .map(file => readFile(`.next/static/chunks/${file}`, 'utf8')));
+        fontCss = styles.join('').match(/@font-face\{[^}]+\}/g)?.join('') ?? '';
+    } catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error; }
+    const css = fontCss + ':root{--font-body:"IBM Plex Sans",Arial;--font-display:"Barlow Condensed",Arial}'
+        + await readFile('app/globals.css', 'utf8');
+    const server = createServer(async (request, response) => {
+        const path = new URL(request.url!, 'http://localhost').pathname;
+        if (path === '/client-config.json') {
+            response.setHeader('Content-Type', 'application/json');
+            response.end(JSON.stringify({ url: currentBackend().url, token }));
+        } else if (path === '/style.css') { response.setHeader('Content-Type', 'text/css'); response.end(css); }
+        else if (path.endsWith('.woff2')) {
+            response.setHeader('Content-Type', 'font/woff2');
+            response.end(await readFile(`.next/static/media/${basename(path)}`));
+        } else if (path === '/bundle.js') {
+            response.setHeader('Content-Type', 'text/javascript'); response.end(await readFile(`${evidence}/bundle.js`));
+        } else response.end('<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+            + '<meta charset="utf-8"><link rel="stylesheet" href="/style.css"></head><body><div id="root"></div>'
+            + '<script type="module" src="/bundle.js"></script></body></html>');
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address(); assert(address && typeof address !== 'string');
+    const port = address.port;
+    async function open() {
+        await browser('open', `http://127.0.0.1:${port}`); await browser('wait', '.room');
+        await evaluate('document.fonts.ready.then(()=>true)');
+    }
+    async function tab(name: string) {
+        if (await evaluate<number>('innerWidth') < 1220) {
+            await browser('find', 'role', 'tab', 'click', '--name', name, '--exact');
+        }
+    }
+    async function inspectTeam(id: number, key = 'Enter') {
+        const selector = `.team-name button[aria-controls="team-roster-${id}"]`;
+        assert(await evaluate<boolean>(`!!document.querySelector(${JSON.stringify(selector)})`),
+            'Every team name must be a real inspection button');
+        await browser('focus', selector); await browser('press', key);
+    }
+    try {
+        for (const [width, height] of [[1440,900],[390,844],[390,667]]) {
+            await browser('set', 'viewport', String(width), String(height));
+            for (const mode of ['empty','partial','full'] as const) {
+                const state = await seed(mode); await open();
+                const label = `${width}x${height}-${mode}`;
+                await check(`${label} My roster shows every occupied and open slot`, async () => {
+                    await tab('My roster');
+                    const proof = await evaluate<Measurements>(measure('.roster'));
+                    await writeFile(`${evidence}/${label}-mine.json`, JSON.stringify(proof, null, 2));
+                    await browser('scroll', 'up', '2000', '--selector', '.roster .scroll');
+                    await browser('screenshot', `${evidence}/${label}-mine.png`);
+                    await browser('scroll', 'down', '2000', '--selector', '.roster .scroll');
+                    await browser('screenshot', `${evidence}/${label}-mine-bottom.png`);
+                    assertSlots(proof, state, 1, false); return proof;
+                });
+                await check(`${label} inspected Teams roster shows the same read-only slots`, async () => {
+                    await tab('Teams'); await inspectTeam(2);
+                    const proof = await evaluate<Measurements>(measure('#team-roster-2'));
+                    await writeFile(`${evidence}/${label}-teams.json`, JSON.stringify(proof, null, 2));
+                    await browser('scroll', 'up', '2000', '--selector', '.teams .scroll');
+                    await browser('screenshot', `${evidence}/${label}-teams.png`);
+                    await evaluate(`(() => {
+                        const rows=document.querySelectorAll('#team-roster-2 .roster-row');
+                        const last=rows[rows.length-1],scroll=document.querySelector('.teams .scroll');
+                        scroll.scrollTop+=last.getBoundingClientRect().bottom-scroll.getBoundingClientRect().bottom;
+                        return true;})()`);
+                    await browser('screenshot', `${evidence}/${label}-teams-bottom.png`);
+                    assertSlots(proof, state, 2, true); return proof;
+                });
+            }
+        }
+        await check('Team inspection opens and closes by keyboard, one team at a time', async () => {
+            await browser('set', 'viewport', '390', '844'); await seed('partial'); await open(); await tab('Teams');
+            await inspectTeam(2);
+            assert.equal(await evaluate('document.querySelector(".team-name button[aria-expanded=true]").textContent'),
+                'Matthew');
+            await inspectTeam(2, 'Space');
+            assert.equal(await evaluate('document.querySelectorAll(".team-roster").length'), 0);
+            await inspectTeam(2); await inspectTeam(1);
+            assert.equal(await evaluate('document.querySelectorAll(".team-roster").length'), 1);
+            assert.equal(await evaluate('document.querySelectorAll("#team-roster-1 .placement button").length'), 0);
+            await inspectTeam(1);
+            assert.equal(await evaluate('document.querySelectorAll(".team-roster").length'), 0);
+        });
+        await check('Placement controls move a real player to Taxi, IR and Active without adding slots', async () => {
+            await seed('partial'); await open(); await tab('My roster');
+            const beforeEvent = Number((await getState()).recentEvents[0]?.id ?? 0);
+            await evaluate(`(() => {
+                window.slotClicks=[];document.addEventListener('click',event=>window.slotClicks.push(
+                    {tag:event.target.tagName,text:event.target.closest('button')?.textContent}),
+                    {capture:true});return true;})()`);
+            for (const [button, placement] of [['To Taxi','taxi'],['To IR','ir'],['To Active','active']] as const) {
+                const state = await getState();
+                const entry = state.roster.find(entry => entry.playerId === mover.id)!;
+                const controls = await evaluate<string[]>(`[...document.querySelectorAll(
+                    '#roster-${entry.lotId} .placement button')].map(button=>button.textContent)`);
+                const index = controls.indexOf(button);
+                assert(index >= 0, `${button} must be available on ${mover.name}: ${JSON.stringify(controls)}`);
+                const reachable = await evaluate<boolean>(`(() => {
+                    const row=document.querySelector('#roster-${entry.lotId}');
+                    const scroll=document.querySelector('.roster .scroll');
+                    const r=row.getBoundingClientRect(),s=scroll.getBoundingClientRect();
+                    scroll.scrollTop+=r.top-s.top-(scroll.clientHeight-r.height)/2;
+                    const button=row.querySelector('.placement button:nth-child(${index + 1})');
+                    const b=button.getBoundingClientRect();
+                    return button.contains(document.elementFromPoint((b.left+b.right)/2,(b.top+b.bottom)/2));
+                })()`);
+                assert(reachable, 'The placement button must be visible after panel scrolling');
+                await evaluate('window.slotClicks=[];true');
+                await browser('click', `#roster-${entry.lotId} .placement button:nth-child(${index + 1})`);
+                await sleep(150);
+                const observed = await evaluate(`({row:document.querySelector('#roster-${entry.lotId}')?.outerHTML,
+                    error:document.querySelector('.toast')?.textContent,clicks:window.slotClicks,
+                    tab:document.querySelector('.room').dataset.tab,
+                    hit:(()=>{const b=document.querySelector('#roster-${entry.lotId} .placement button');
+                        const r=b?.getBoundingClientRect();return r?{rect:r.toJSON(),
+                            hit:document.elementFromPoint((r.left+r.right)/2,(r.top+r.bottom)/2)?.outerHTML}:null;})()})`);
+                await writeFile(`${evidence}/placement-${placement}.json`, JSON.stringify({ controls, observed,
+                    entry:(await getState()).roster.find(entry=>entry.playerId===mover.id) },null,2));
+                await until(`(() => {
+                    const group=document.querySelector('#roster-${entry.lotId}')?.closest('.roster-group')
+                        ?.querySelector('h3')?.firstChild.textContent.trim();
+                    return ${placement === 'active' ? "group==='Starters'||group==='Bench'"
+                        : `group===${JSON.stringify(placement === 'taxi' ? 'Taxi' : 'IR')}`};
+                })()`);
+                const changed = await getState();
+                assert.equal(changed.roster.find(entry => entry.playerId === mover.id)!.placement, placement);
+                assertSlots(await evaluate<Measurements>(measure('.roster')), changed, 1, false);
+            }
+            const changes = (await getState()).recentEvents.filter(event => Number(event.id) > beforeEvent
+                && event.type === 'placement' && event.data.playerId === mover.id);
+            assert.deepEqual(changes.map(event => event.data.to).reverse(), ['taxi','ir','active']);
+            return { changes };
+        });
+        await check('A fresh public Force sale scrolls to and highlights the replacement slot', async () => {
+            const state = await seed('partial');
+            const id = state.roster.length + 1;
+            await configure({ lot: { id, playerId: freshPlayer.id, nominatorId: 2, highBidderId: 1,
+                highBid: 4, status: 'open' }, draft: { lotId: id } });
+            await open(); await tab('My roster');
+            await browser('scroll', 'down', '2000', '--selector', '.roster .scroll');
+            await act({ type: 'force', lotId: id, expectedHighBidderId: 1, expectedHighBid: 4 }, token);
+            await until(`!!document.querySelector('#roster-${id}.fresh')`);
+            const proof = await evaluate<{ visible: boolean; scrollTop: number; background: string }>(`(() => {
+                const row=document.querySelector('#roster-${id}');const scroll=document.querySelector('.roster .scroll');
+                const r=row.getBoundingClientRect(),s=scroll.getBoundingClientRect();
+                return {visible:r.top>=s.top-1&&r.bottom<=s.bottom+1,scrollTop:scroll.scrollTop,
+                    background:getComputedStyle(row).backgroundColor};})()`);
+            assert(proof.visible, 'A new win must be visible in its panel');
+            assert.notEqual(proof.background, 'rgba(0, 0, 0, 0)');
+            await browser('screenshot', `${evidence}/390x844-fresh-win.png`);
+            assert.equal(await evaluate(`document.querySelector('#roster-${id} strong').textContent`), freshPlayer.name);
+            assertSlots(await evaluate<Measurements>(measure('.roster')), await getState(), 1, false);
+            return proof;
+        });
+        await check('Short mobile details preserve inspected selection and all reachable slots', async () => {
+            await browser('set', 'viewport', '390', '667'); const state = await seed('partial'); await open();
+            await tab('Teams'); await inspectTeam(2);
+            await browser('find', 'role', 'button', 'click', '--name', 'Details', '--exact');
+            assert.equal(await evaluate('document.querySelector(".lot-heading button").getAttribute("aria-expanded")'),
+                'true');
+            assertSlots(await evaluate<Measurements>(measure('#team-roster-2')), state, 2, true);
+            await browser('screenshot', `${evidence}/390x667-details-expanded.png`);
+            await browser('scroll', 'up', '2000', '--selector', '.block-information');
+            await browser('focus', '.lot-heading button'); await browser('press', 'Enter');
+            assert.equal(await evaluate('Boolean(document.querySelector(".block .details"))'), false);
+            assertSlots(await evaluate<Measurements>(measure('#team-roster-2')), state, 2, true);
+            await tab('My roster');
+            assertSlots(await evaluate<Measurements>(measure('.roster')), state, 1, false);
+            await tab('Teams'); assert.equal(await evaluate('document.querySelectorAll("#team-roster-2").length'), 1);
+            await browser('screenshot', `${evidence}/390x667-details-recovery.png`);
+        });
+        await check('Team inspection preserves commissioner Release and nomination labels', async () => {
+            await seed('partial'); await open(); await tab('Teams'); await inspectTeam(2);
+            const row = '.team-row:has([aria-controls="team-roster-2"])';
+            assert(await evaluate(`document.querySelector(${JSON.stringify(row)})?.textContent.includes('12/20')`));
+            await browser('click', `${row} .release`); await browser('click', `${row} .release`);
+            await until(`!document.querySelector(${JSON.stringify(row + ' .release')})`);
+            assert.equal((await getState()).managers[1].claimed, false);
+            assert.equal(await evaluate('document.querySelectorAll("#team-roster-2").length'), 1);
+            assert(await evaluate('document.querySelector(".team-row:has([aria-controls=team-roster-3])")'
+                + '.textContent.includes("Nominated")'));
+        });
+        await check('The unassigned Active fallback keeps twenty spots with open placeholders', async () => {
+            const guards = players.filter(player => player.positions.length === 1 && player.positions[0] === 'PG')
+                .slice(0,16);
+            assert.equal(guards.length, 16); assert.equal(matching(guards), null);
+            await configure({ roster: guards.map((player,index) => ({ playerId:player.id, managerId:1,
+                placement:'active', price:1, lotId:index+1 })), draft: { lotId:null, phase:'nomination' } });
+            await open(); await tab('My roster');
+            const proof = await evaluate<Measurements>(measure('.roster'));
+            frame(proof); assert.equal(proof.groups.Active.length,20);
+            assert.equal(proof.groups.Active.filter(row=>row.open).length,4);
+            proof.groups.Active.forEach((row,index) => {
+                assert.equal(row.label, `Active spot ${index+1} of 20, ${guards[index]?.name ?? 'open'}`);
+                assert(row.reachable); if(row.open){assert(!row.interactive);assert.equal(row.tabIndex,-1);}
+            });
+            await browser('screenshot', `${evidence}/390x667-active-fallback.png`);
+            return proof;
+        });
+        assert.equal(await browser('errors'), '');
+    } finally {
+        try {
+            await browser('close');
+            for (let attempt = 0; ; attempt++) {
+                if (!(await execute('agent-browser', ['session','list'])).stdout.includes(session)) break;
+                assert(attempt < 100); await sleep(50);
+            }
+        } finally {
+            await new Promise<void>(resolve => server.close(() => resolve()));
+            await requireClosedPort(port); await dropIsolated(isolated);
+            await writeFile(`${evidence}/results.json`, JSON.stringify(results,null,2));
+            await writeFile(`${evidence}/shutdown.json`, JSON.stringify({ session, browserClosed:true,
+                frontendPort:port, frontendClosed:true, backendClosed:true }));
+        }
+    }
+    assert(results.every(result => result.result === 'passed'), 'Every roster-slot check must pass');
+}
+main().catch(error => { console.error(error); process.exitCode=1; });

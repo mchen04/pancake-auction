@@ -22,6 +22,17 @@ describe('review component regressions', () => {
         expect(html).toContain('review-new');
         expect(html).toContain('$12');
     });
+    it('Roster fallback keeps twenty active spots when player metadata is missing', () => {
+        const state = roomFixture();
+        state.players = [];
+        state.lot = null;
+        state.roster = [{ playerId: 'review-new', managerId: 1, placement: 'active', price: 12, lotId: 1 }];
+        const props = { state, me: state.managers[0], busy: false, connected: true, send: async () => {} };
+        const html = renderToString(createElement(RosterPanel, props));
+        expect(html.match(/aria-label="Active spot \d+ of 20,/g)).toHaveLength(20);
+        expect(html).toContain('Active spot 1 of 20, review-new');
+        expect(html).toContain('Active spot 20 of 20, open');
+    });
     it('B2/C2 a current lot retains controls when its pool entry is missing', () => {
         const state = roomFixture();
         state.players = [];

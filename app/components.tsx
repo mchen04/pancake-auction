@@ -1,5 +1,5 @@
 'use client';
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import {
   canNominate, counts, legalPlacements, matching, maxBid, rankedDynastyAdp, slots, taxiEligibility, timeoutNominee
 } from '../lib/rules';
@@ -523,7 +523,9 @@ function teamStatus(state: AuctionState, manager: Manager, maximum: number) {
   return { text: '', tone: '' };
 }
 
-export function TeamsPanel({ state, me, busy, send }: RoomProps) {
+export function TeamsPanel(props: RoomProps) {
+  const { state, me, busy, send } = props;
+  const [inspectedId, setInspectedId] = useState<number | null>(null);
   const current = findPlayer(state, state.lot?.playerId);
   const seatsEditable = me.commissioner && (state.draft.status === 'setup' || state.draft.status === 'paused');
   const live = state.draft.status === 'running' || state.draft.status === 'paused';
@@ -545,39 +547,53 @@ export function TeamsPanel({ state, me, busy, send }: RoomProps) {
           const turnLabel = !live ? '' : manager.id === state.draft.nominatorId ? 'Now'
             : upcoming.includes(manager.id) ? String(upcoming.indexOf(manager.id) + 1) : '—';
           const turn = !state.lot && state.draft.nominatorId === manager.id && state.draft.status !== 'complete';
+          const rowClass = ['team-row', 'team-grid', seatsEditable ? 'with-admin' : '', live ? 'with-turn' : '',
+            manager.id === me.id ? 'me' : '', turn ? 'turn' : ''].join(' ');
           return (
-            <div key={manager.id}
-              className={`team-row team-grid ${seatsEditable ? 'with-admin' : ''} ${live ? 'with-turn' : ''} ${manager.id === me.id ? 'me' : ''} ${turn ? 'turn' : ''}`}>
-              <span className="team-name">
-                <b>{manager.name}</b>
-                {status.text && <span className={`status ${status.tone}`}>{status.text}</span>}
-                {live && turnLabel !== '—' && (
-                  <span className="turn-inline">
-                    {turnLabel !== 'Now' ? `Turn ${turnLabel}` : state.lot ? 'Nominated' : 'Nominating'}
-                  </span>
-                )}
-              </span>
-              <span className="num">{dollars(manager.budget)}</span>
-              <span className="num">{dollars(maximum)}</span>
-              <span className={`num ${c.active === 20 ? 'full' : ''}`}>{c.active}/20</span>
-              <span className={`num ${c.taxi === 3 ? 'full' : ''}`}>{c.taxi}/3</span>
-              <span className={`num ${c.ir === 2 ? 'full' : ''}`}>{c.ir}/2</span>
-              {live && (
-                <span className="num turn-col" title={turnLabel === '—' ? 'Not in the nomination rotation' : undefined}>
-                  {turnLabel}
-                </span>
-              )}
-              {seatsEditable && (
-                <span>
-                  {manager.claimed && manager.id !== me.id && seatsEditable && (
-                    <ConfirmButton className="release ghost small" label="Release" confirmLabel={`Release ${manager.name}?`}
-                      disabled={busy}
-                      title={`Release ${manager.name}'s seat so they can rejoin on another device`}
-                      onConfirm={() => void send({ type: 'release', managerId: manager.id })} />
+            <Fragment key={manager.id}>
+              <div className={rowClass}>
+                <span className="team-name">
+                  <button className="team-inspect" aria-expanded={inspectedId === manager.id}
+                    aria-controls={`team-roster-${manager.id}`}
+                    title={inspectedId === manager.id ? 'Hide roster' : 'View roster'}
+                    onClick={() => setInspectedId(inspectedId === manager.id ? null : manager.id)}>
+                    {manager.name}
+                  </button>
+                  {status.text && <span className={`status ${status.tone}`}>{status.text}</span>}
+                  {live && turnLabel !== '—' && (
+                    <span className="turn-inline">
+                      {turnLabel !== 'Now' ? `Turn ${turnLabel}` : state.lot ? 'Nominated' : 'Nominating'}
+                    </span>
                   )}
                 </span>
+                <span className="num">{dollars(manager.budget)}</span>
+                <span className="num">{dollars(maximum)}</span>
+                <span className={`num ${c.active === 20 ? 'full' : ''}`}>{c.active}/20</span>
+                <span className={`num ${c.taxi === 3 ? 'full' : ''}`}>{c.taxi}/3</span>
+                <span className={`num ${c.ir === 2 ? 'full' : ''}`}>{c.ir}/2</span>
+                {live && (
+                  <span className="num turn-col" title={turnLabel === '—' ? 'Not in the nomination rotation' : undefined}>
+                    {turnLabel}
+                  </span>
+                )}
+                {seatsEditable && (
+                  <span>
+                    {manager.claimed && manager.id !== me.id && seatsEditable && (
+                      <ConfirmButton className="release ghost small" label="Release" confirmLabel={`Release ${manager.name}?`}
+                        disabled={busy}
+                        title={`Release ${manager.name}'s seat so they can rejoin on another device`}
+                        onConfirm={() => void send({ type: 'release', managerId: manager.id })} />
+                    )}
+                  </span>
+                )}
+              </div>
+              {inspectedId === manager.id && (
+                <div className="team-roster" id={`team-roster-${manager.id}`}
+                  role="region" aria-label={`${manager.name}'s roster`}>
+                  <RosterSlots {...props} manager={manager} readOnly />
+                </div>
               )}
-            </div>
+            </Fragment>
           );
         })}
       </div>
@@ -623,39 +639,97 @@ function PlacementSwitch(props: RoomProps & { entry: Entry }) {
   );
 }
 
-function RosterRow(props: RoomProps & { entry: Entry; slot: string; fresh?: boolean }) {
-  const { state, entry, slot, fresh } = props;
-  const player = findPlayer(state, entry.playerId);
+function RosterSlot(props: RoomProps & {
+  entry?: Entry; slot: string; position: string; index: number; capacity: number; fresh?: boolean; readOnly?: boolean
+}) {
+  const { state, entry, slot, position, index, capacity, fresh, readOnly } = props;
+  const player = findPlayer(state, entry?.playerId);
+  const label = `${position} spot ${index + 1} of ${capacity}, ${entry ? player?.name ?? entry.playerId : 'open'}`;
   return (
-    <div className={`roster-row ${fresh ? 'fresh' : ''}`} id={`roster-${entry.lotId}`}>
+    <div className={`roster-row ${entry ? fresh ? 'fresh' : '' : 'open'}`} role="group" aria-label={label}
+      id={entry && !readOnly ? `roster-${entry.lotId}` : undefined}>
       <span className="slot">{slot}</span>
-      <span className="roster-name">
-        <strong title={player?.name ?? entry.playerId}>{player?.name ?? entry.playerId}</strong>
-        <small>{player ? positionsLabel(player) : 'Player data is loading'} · {dollars(entry.price)}</small>
-        {player && <><InjuryTag status={player.injuryStatus} /><EligibilityTags player={player} /></>}
-      </span>
-      <PlacementSwitch {...props} />
+      {entry ? <>
+        <span className="roster-name">
+          <strong title={player?.name ?? entry.playerId}>{player?.name ?? entry.playerId}</strong>
+          <small>{player ? positionsLabel(player) : 'Player data is loading'} · {dollars(entry.price)}</small>
+          {player && <><InjuryTag status={player.injuryStatus} /><EligibilityTags player={player} /></>}
+        </span>
+        {!readOnly && <PlacementSwitch {...props} entry={entry} />}
+      </> : <span className="muted">Open</span>}
     </div>
   );
 }
-function OpenSlot({ slot }: { slot: string }) {
-  return <div className="roster-row open"><span className="slot">{slot}</span><span className="muted">Open</span></div>;
+function RosterGroup(props: RoomProps & {
+  name: string; code: string; capacity: number; entries: (Entry | undefined)[]; positions?: string[];
+  freshLot?: number | null; readOnly?: boolean; title?: string; showCount?: boolean
+}) {
+  return (
+    <div className="roster-group">
+      <h3 title={props.title}>{props.name}{props.showCount && (
+        <span>{props.entries.filter(Boolean).length}/{props.capacity}</span>
+      )}</h3>
+      {Array.from({ length: props.capacity }, (_, index) => (
+        <RosterSlot {...props} key={index} index={index} entry={props.entries[index]}
+          slot={props.positions?.[index] ?? props.code} position={props.positions?.[index] ?? props.name}
+          fresh={props.entries[index]?.lotId === props.freshLot} />
+      ))}
+    </div>
+  );
 }
-
-export function RosterPanel(props: RoomProps) {
-  const { state, me } = props;
-  const entries = entriesOf(state, me.id);
+function RosterSlots(props: RoomProps & {
+  manager: Manager; readOnly?: boolean; freshLot?: number | null; children?: ReactNode
+}) {
+  const entries = entriesOf(props.state, props.manager.id);
   const active = entries.filter(entry => entry.placement === 'active');
-  const taxi = entries.filter(entry => entry.placement === 'taxi');
-  const ir = entries.filter(entry => entry.placement === 'ir');
-  const c = counts(entries);
-  const pauseReason = state.draft.status === 'paused' ? 'Available when the draft resumes' : undefined;
-  const activePlayers = active.map(entry => findPlayer(state, entry.playerId));
+  const activePlayers = active.map(entry => findPlayer(props.state, entry.playerId));
   const assignment = activePlayers.every(player => player !== undefined)
     ? matching(activePlayers) ?? Array<number>(slots.length).fill(-1) : Array<number>(slots.length).fill(-1);
   const assigned = new Set<number>(assignment.filter(index => index >= 0));
   const pendingEntries = active.filter((_, index) => !assigned.has(index));
-  const bench = assignment.slice(10).filter(index => index >= 0);
+  const bench = assignment.slice(10).filter(index => index >= 0).map(index => active[index]);
+  return (
+    <div className="roster-slots">
+      {pendingEntries.length ? (
+        <RosterGroup {...props} name="Active" code="Active" capacity={20} entries={pendingEntries} />
+      ) : <>
+        <RosterGroup {...props} name="Starters" code="" capacity={10} positions={slots.slice(0, 10)}
+          entries={assignment.slice(0, 10).map(index => active[index])} />
+        <RosterGroup {...props} name="Bench" code="BN" capacity={10} entries={bench} showCount />
+      </>}
+      {props.children}
+      <RosterGroup {...props} name="Taxi" code="TX" capacity={3} showCount
+        entries={entries.filter(entry => entry.placement === 'taxi')} title="Rookies or players under 65 career games" />
+      <RosterGroup {...props} name="IR" code="IR" capacity={2} showCount
+        entries={entries.filter(entry => entry.placement === 'ir')} title="Only players listed Out" />
+    </div>
+  );
+}
+function NominationPreference(props: RoomProps) {
+  const { state, me } = props;
+  const entries = entriesOf(state, me.id);
+  const pauseReason = state.draft.status === 'paused' ? 'Available when the draft resumes' : undefined;
+  if (!(me.done || onlyReserveOpen(entries) && me.budget >= 1)
+    || state.draft.status === 'complete' || state.draft.status === 'setup') return null;
+  return (
+    <div className="skip-note">
+      <p>
+        {me.done ? 'You are skipping your nominations.' : 'Only taxi and IR spots are left.'} You can still bid.
+        {pauseReason && <span id={`nomination-pause-${me.id}`}> {pauseReason}.</span>}
+      </p>
+      <button className="ghost small" disabled={props.busy || state.draft.status !== 'running'}
+        title={pauseReason} aria-describedby={pauseReason ? `nomination-pause-${me.id}` : undefined}
+        onClick={() => void props.send({ type: 'done', done: !me.done,
+          nominationGeneration: state.draft.nominationGeneration })}>
+        {me.done ? 'Nominate again' : 'Skip my nominations'}
+      </button>
+    </div>
+  );
+}
+
+export function RosterPanel(props: RoomProps) {
+  const { state, me } = props;
+  const c = counts(entriesOf(state, me.id));
   const latestWin = state.sales.find(sale => sale.highBidderId === me.id)?.id ?? null;
   const freshLot = latestWin !== null && (state.lot?.id ?? 0) <= latestWin && (state.sales[0]?.id ?? 0) <= latestWin
     ? latestWin : null;
@@ -671,41 +745,7 @@ export function RosterPanel(props: RoomProps) {
         </span>
       </div>
       <div className="scroll">
-        {pendingEntries.length ? <>
-          <h3>Active</h3>
-          {pendingEntries.map(entry => <RosterRow {...props} key={entry.playerId} entry={entry} slot="Active"
-            fresh={entry.lotId === freshLot} />)}
-        </> : <>
-          <h3>Starters</h3>
-          {assignment.slice(0, 10).map((index, slot) => index >= 0
-            ? <RosterRow {...props} key={active[index].playerId} entry={active[index]} slot={slots[slot]}
-              fresh={active[index].lotId === freshLot} />
-            : <OpenSlot key={`slot-${slot}`} slot={slots[slot]} />)}
-          <h3>Bench <span>{bench.length}/10</span></h3>
-          {bench.map(index => (
-            <RosterRow {...props} key={active[index].playerId} entry={active[index]} slot=""
-              fresh={active[index].lotId === freshLot} />
-          ))}
-        </>}
-        {(me.done || (onlyReserveOpen(entries) && me.budget >= 1)) && state.draft.status !== 'complete'
-          && state.draft.status !== 'setup' && (
-          <div className="skip-note">
-            <p>
-              {me.done ? 'You are skipping your nominations.' : 'Only taxi and IR spots are left.'} You can still bid.
-              {pauseReason && <span id={`nomination-pause-${me.id}`}> {pauseReason}.</span>}
-            </p>
-            <button className="ghost small" disabled={props.busy || state.draft.status !== 'running'}
-              title={pauseReason} aria-describedby={pauseReason ? `nomination-pause-${me.id}` : undefined}
-              onClick={() => void props.send({ type: 'done', done: !me.done,
-                nominationGeneration: state.draft.nominationGeneration })}>
-              {me.done ? 'Nominate again' : 'Skip my nominations'}
-            </button>
-          </div>
-        )}
-        <h3 title="Rookies or players under 65 career games">Taxi <span>{c.taxi}/3</span></h3>
-        {taxi.map(entry => <RosterRow {...props} key={entry.playerId} entry={entry} slot="" fresh={entry.lotId === freshLot} />)}
-        <h3 title="Only players listed Out">IR <span>{c.ir}/2</span></h3>
-        {ir.map(entry => <RosterRow {...props} key={entry.playerId} entry={entry} slot="" fresh={entry.lotId === freshLot} />)}
+        <RosterSlots {...props} manager={me} freshLot={freshLot}><NominationPreference {...props} /></RosterSlots>
       </div>
     </section>
   );
