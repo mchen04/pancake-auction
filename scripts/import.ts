@@ -1,7 +1,8 @@
-import { mkdir, readFile, writeFile, stat } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { begin, closeDatabase } from "../lib/db";
 import { buildPool, sourceUrls } from "../lib/import-data";
+import { readSnapshot, writeSnapshot, type Snapshot } from "../lib/import-cache";
 import { loadEnvironment, safeError } from "./env";
 async function main() {
     loadEnvironment();
@@ -13,30 +14,15 @@ async function main() {
         throw new Error("EVIDENCE_DIR must be outside the repository");
     }
     const snapshot = evidence ? `${evidence}/import/sleeper-2026.json` : null;
-    let raw: unknown[] = [];
-    if (snapshot) {
-        try {
-            if (Date.now() - (await stat(snapshot)).mtimeMs < 86400000) {
-                raw = JSON.parse(await readFile(snapshot, "utf8"));
-            }
-        }
-        catch {
-        }
-    }
+    if (evidence) await mkdir(`${evidence}/import`, { recursive: true });
+    const cached = snapshot ? await readSnapshot(snapshot) : null;
+    const raw: unknown[] = cached && Array.isArray(cached.data) ? cached.data : [];
+    const fetchedTimes: number[] = [];
     if (!raw.length) {
         for (let i = 0; i < sourceUrls.length; i++) {
-            let data: unknown;
             const initial = evidence ? `${evidence}/import/source-${i}.json` : null;
-            if (initial) {
-                try {
-                    if (Date.now() - (await stat(initial)).mtimeMs < 86400000) {
-                        data = JSON.parse(await readFile(initial, "utf8"));
-                    }
-                }
-                catch {
-                }
-            }
-            if (!data) {
+            let source: Snapshot | null = initial ? await readSnapshot(initial) : null;
+            if (!source) {
                 const response = await fetch(sourceUrls[i], {
                     headers: {
                         "User-Agent": "PancakeAuction/1.0 (one-time NBA dynasty auction import)"
@@ -46,13 +32,12 @@ async function main() {
                 if (!response.ok) {
                     throw new Error(`Sleeper HTTP ${response.status} at source ${i + 1}`);
                 }
-                data = await response.json();
+                source = { fetchedAt: new Date().toISOString(), data: await response.json() };
+                if (initial) await writeSnapshot(initial, source);
                 await new Promise(resolve => setTimeout(resolve, 150));
             }
-            if (initial) {
-                await writeFile(initial, JSON.stringify(data));
-            }
-            raw.push(data);
+            fetchedTimes.push(Date.parse(source.fetchedAt));
+            raw.push(source.data);
         }
     }
     else
@@ -64,11 +49,8 @@ async function main() {
         counts: result.counts,
         coverage: result.coverage
     }, null, 2));
-    if (snapshot) {
-        await mkdir(`${evidence}/import`, {
-            recursive: true
-        });
-        await writeFile(snapshot, JSON.stringify(raw));
+    if (snapshot && !cached) {
+        await writeSnapshot(snapshot, { fetchedAt: new Date(Math.min(...fetchedTimes)).toISOString(), data: raw });
     }
     if (!apply) {
         console.log("Dry run: no database writes.");

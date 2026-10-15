@@ -1,6 +1,8 @@
 'use client';
 import { Fragment, useEffect, useState } from 'react';
-import { counts, legalPlacements, matching, maxBid, slots, taxiEligibility } from '../lib/rules';
+import {
+  canNominate, counts, legalPlacements, matching, maxBid, rankedDynastyAdp, slots, taxiEligibility
+} from '../lib/rules';
 import type { Action, AuctionState, Draft, Entry, Manager, Placement, Player, RecentEvent } from '../lib/types';
 
 export const dollars = (amount: number) => `$${amount}`;
@@ -19,7 +21,8 @@ const statLabels: [string, string[]][] = [
 ];
 
 function findPlayer(state: AuctionState, id: string | undefined) {
-  return state.players.find(player => player.id === id);
+  return state.players.find(player => player.id === id)
+    ?? (state.lot?.playerId === id ? state.lot?.player : undefined);
 }
 function entriesOf(state: AuctionState, managerId: number | null) {
   return state.roster.filter(entry => entry.managerId === managerId);
@@ -39,15 +42,10 @@ function timeoutText(state: AuctionState, manager: Manager | undefined) {
   const pick = timeoutPick(state, manager);
   return pick ? `Time out: ${pick.name} opens at $1.` : 'Time out: the turn passes.';
 }
-function mayNominate(state: AuctionState, manager: Manager | undefined) {
-  if (!manager || manager.done || manager.budget < 1) return false;
-  const c = counts(entriesOf(state, manager.id));
-  return c.active < 20 || c.taxi < 3 || c.ir < 2;
-}
 function upcomingNominators(state: AuctionState) {
   const { order, turnIndex } = state.draft;
   return Array.from({ length: order.length - 1 }, (_, step) => order[(turnIndex + step + 1) % order.length])
-    .filter(id => mayNominate(state, state.managers.find(candidate => candidate.id === id)));
+    .filter(id => canNominate(state, state.managers.find(candidate => candidate.id === id)));
 }
 function onlyReserveOpen(entries: Entry[]) {
   const c = counts(entries);
@@ -72,6 +70,12 @@ function Cell({ value, unknown, className = '', title }: {
 }
 function projectionLabel(player: Player) {
   return player.projection === null ? 'none' : player.projection.toFixed(1);
+}
+
+function DynastyAdp({ value }: { value: number | null }) {
+  const rank = rankedDynastyAdp(value);
+  return <Cell value={rank?.toFixed(1) ?? ''} className="muted"
+    unknown={rank === null ? 'Unranked by Sleeper' : null} />;
 }
 
 function InjuryTag({ status }: { status: string | null }) {
@@ -130,7 +134,7 @@ export function PlayerDetails({ player }: { player: Player }) {
         {careerDetail(player) && <><dt>Career games</dt><dd>{careerDetail(player)}</dd></>}
         <dt>NBA seasons</dt><dd>{player.yearsExp === null ? 'unknown' : player.yearsExp}</dd>
         <dt className="phone-only">Dynasty ADP</dt>
-        <dd className="phone-only">{player.adp ? player.adp.toFixed(1) : 'unknown'}</dd>
+        <dd className="phone-only"><DynastyAdp value={player.adp} /></dd>
       </dl>
     </div>
   );
@@ -207,7 +211,7 @@ export function PoolPanel(props: RoomProps & { opening: number }) {
         : player.positions.includes(position as Player['positions'][number]))));
   pool.sort((a, b) => {
     if (sort === 'age') return (a.age ?? Infinity) - (b.age ?? Infinity);
-    if (sort === 'adp') return (a.adp || Infinity) - (b.adp || Infinity);
+    if (sort === 'adp') return (rankedDynastyAdp(a.adp) ?? Infinity) - (rankedDynastyAdp(b.adp) ?? Infinity);
     return (b.projection ?? -Infinity) - (a.projection ?? -Infinity);
   });
   const nominating = myNominationTurn(state, me);
@@ -258,8 +262,7 @@ export function PoolPanel(props: RoomProps & { opening: number }) {
                   title={player.careerGamesComplete ? undefined : `At least ${player.careerGames}; counted from 2013–14 only`} />
                 <Cell value={projectionLabel(player)} className="strong"
                   unknown={player.projection === null ? 'No Sleeper projection' : null} />
-                <Cell value={player.adp ? player.adp.toFixed(1) : ''} className="muted"
-                  unknown={player.adp ? null : 'No dynasty ADP'} />
+                <DynastyAdp value={player.adp} />
                 {nominating && (
                   <span>
                     {blocker ? <small className="blocked">{blocker}</small> : (
@@ -301,13 +304,13 @@ function bidBlocker(props: RoomProps, maximum: number, passed: boolean) {
   return '';
 }
 
-function BidControls(props: RoomProps & { player: Player }) {
+function BidControls(props: RoomProps & { player: Player | undefined }) {
   const { state, me, send, player } = props;
   const lot = state.lot!;
   const [custom, setCustom] = useState('');
-  const maximum = maxBid(me.budget, player, entriesOf(state, me.id), state.players);
+  const maximum = player ? maxBid(me.budget, player, entriesOf(state, me.id), state.players) : 0;
   const passed = state.passes.includes(me.id);
-  const blocker = bidBlocker(props, maximum, passed);
+  const blocker = player ? bidBlocker(props, maximum, passed) : 'Player data is loading';
   const customAmount = Number(custom);
   const customValid = Number.isInteger(customAmount) && customAmount > lot.highBid && customAmount <= maximum;
   const bid = (amount: number) => void send({ type: 'bid', lotId: lot.id, amount });
@@ -321,7 +324,13 @@ function BidControls(props: RoomProps & { player: Player }) {
             <span className="step">+{step}</span><span>{dollars(lot.highBid + step)}</span>
           </button>
         ))}
-        <form className="custom" onSubmit={event => { event.preventDefault(); if (customValid) { bid(customAmount); setCustom(''); } }}>
+        <form className="custom" onSubmit={event => {
+          event.preventDefault();
+          if (!blocker && customValid) {
+            bid(customAmount);
+            setCustom('');
+          }
+        }}>
           <input aria-label="Bid amount" inputMode="numeric" placeholder="Amount"
             value={custom} onChange={event => setCustom(event.target.value.replace(/\D/g, ''))} disabled={!!blocker} />
           <button className="primary" disabled={!!blocker || !customValid}>Bid</button>
@@ -427,9 +436,10 @@ function LastWin(props: RoomProps) {
     ? state.roster.find(candidate => candidate.lotId === sale.id) : undefined;
   if (!entry || state.draft.status === 'complete') return null;
   const player = findPlayer(state, entry.playerId);
+  if (!player) return null;
   const moves = (['active', 'taxi', 'ir'] as Placement[])
     .filter(placement => placement !== entry.placement && !moveBlocker(props, entry, placement));
-  if (!player || !moves.length) return null;
+  if (!moves.length) return null;
   return (
     <div className="last-win">
       <span>You won <strong>{player.name}</strong> for {dollars(entry.price)}, placed on {placementPlaces[entry.placement]}.</span>
@@ -458,16 +468,16 @@ export function BlockPanel(props: RoomProps & { offset: number; opening: number;
     <section className={`panel block ${lot ? 'bidding' : ''}`} aria-label="Current player">
       <div className="block-top">
         <div className="block-main">
-          {lot && player ? (
+          {lot ? (
             <>
               <div className="lot-heading">
-                <h2 title={player.name}>{player.name}</h2>
+                <h2 title={player?.name ?? lot.playerId}>{player?.name ?? lot.playerId}</h2>
                 <button className="link" aria-expanded={showDetails}
                   onClick={() => setDetailsFor(showDetails || !lot ? null : lot.id)}>
                   {showDetails ? 'Hide details' : 'Details'}
                 </button>
               </div>
-              <PlayerLine player={player} />
+              {player ? <PlayerLine player={player} /> : <p className="muted">Player data is loading</p>}
               <div className="high-bid">
                 <strong>{dollars(lot.highBid)}</strong>
                 <span>{lot.highBidderId === props.me.id ? 'You lead' : `${nameOf(state, lot.highBidderId)} leads`}</span>
@@ -478,7 +488,7 @@ export function BlockPanel(props: RoomProps & { offset: number; opening: number;
         </div>
         <ShotClock draft={state.draft} offset={offset} />
       </div>
-      {lot && player && <BidControls {...props} player={player} />}
+      {lot && <BidControls key={lot.id} {...props} player={player} />}
       {lot && player && showDetails && <PlayerDetails player={player} />}
       <LastWin {...props} />
     </section>
@@ -557,7 +567,8 @@ export function TeamsPanel({ state, me, busy, send }: RoomProps) {
 
 function moveBlocker(props: RoomProps, entry: Entry, placement: Placement) {
   const { state, me } = props;
-  const player = findPlayer(state, entry.playerId)!;
+  const player = findPlayer(state, entry.playerId);
+  if (!player) return 'Player data is loading';
   const rest = state.roster.filter(e => e.managerId === me.id && e.playerId !== entry.playerId);
   if (!legalPlacements(player, rest, state.players).includes(placement)) {
     if (placement === 'taxi') return taxiEligibility(player) === 'eligible' ? 'Taxi is full' : 'Not taxi eligible';
@@ -567,7 +578,8 @@ function moveBlocker(props: RoomProps, entry: Entry, placement: Placement) {
   const changed = [...rest, { ...entry, placement }];
   if (me.budget < 20 - counts(changed).active) return 'Keep $1 for each open active spot';
   if (state.lot?.highBidderId === me.id) {
-    const standing = findPlayer(state, state.lot.playerId)!;
+    const standing = findPlayer(state, state.lot.playerId);
+    if (!standing) return 'Current player data is loading';
     if (maxBid(me.budget, standing, changed, state.players) < state.lot.highBid) return 'Would break your high bid';
   }
   return '';
@@ -593,15 +605,14 @@ function PlacementSwitch(props: RoomProps & { entry: Entry }) {
 
 function RosterRow(props: RoomProps & { entry: Entry; slot: string; fresh?: boolean }) {
   const { state, entry, slot, fresh } = props;
-  const player = findPlayer(state, entry.playerId)!;
+  const player = findPlayer(state, entry.playerId);
   return (
     <div className={`roster-row ${fresh ? 'fresh' : ''}`} id={`roster-${entry.lotId}`}>
       <span className="slot">{slot}</span>
       <span className="roster-name">
-        <strong title={player.name}>{player.name}</strong>
-        <small>{positionsLabel(player)} · {dollars(entry.price)}</small>
-        <InjuryTag status={player.injuryStatus} />
-        <EligibilityTags player={player} />
+        <strong title={player?.name ?? entry.playerId}>{player?.name ?? entry.playerId}</strong>
+        <small>{player ? positionsLabel(player) : 'Player data is loading'} · {dollars(entry.price)}</small>
+        {player && <><InjuryTag status={player.injuryStatus} /><EligibilityTags player={player} /></>}
       </span>
       <PlacementSwitch {...props} />
     </div>
@@ -618,8 +629,11 @@ export function RosterPanel(props: RoomProps) {
   const taxi = entries.filter(entry => entry.placement === 'taxi');
   const ir = entries.filter(entry => entry.placement === 'ir');
   const c = counts(entries);
-  const activePlayers = active.map(entry => findPlayer(state, entry.playerId)!);
-  const assignment = matching(activePlayers) ?? Array<number>(slots.length).fill(-1);
+  const activePlayers = active.map(entry => findPlayer(state, entry.playerId));
+  const assignment = activePlayers.every(player => player !== undefined)
+    ? matching(activePlayers) ?? Array<number>(slots.length).fill(-1) : Array<number>(slots.length).fill(-1);
+  const assigned = new Set<number>(assignment.filter(index => index >= 0));
+  const pendingEntries = active.filter((_, index) => !assigned.has(index));
   const bench = assignment.slice(10).filter(index => index >= 0);
   const latestWin = state.sales.find(sale => sale.highBidderId === me.id)?.id ?? null;
   const freshLot = latestWin !== null && (state.lot?.id ?? 0) <= latestWin && (state.sales[0]?.id ?? 0) <= latestWin
@@ -636,16 +650,22 @@ export function RosterPanel(props: RoomProps) {
         </span>
       </div>
       <div className="scroll">
-        <h3>Starters</h3>
-        {assignment.slice(0, 10).map((index, slot) => index >= 0
-          ? <RosterRow {...props} key={active[index].playerId} entry={active[index]} slot={slots[slot]}
-            fresh={active[index].lotId === freshLot} />
-          : <OpenSlot key={`slot-${slot}`} slot={slots[slot]} />)}
-        <h3>Bench <span>{bench.length}/10</span></h3>
-        {bench.map(index => (
-          <RosterRow {...props} key={active[index].playerId} entry={active[index]} slot=""
-            fresh={active[index].lotId === freshLot} />
-        ))}
+        {pendingEntries.length ? <>
+          <h3>Active</h3>
+          {pendingEntries.map(entry => <RosterRow {...props} key={entry.playerId} entry={entry} slot="Active"
+            fresh={entry.lotId === freshLot} />)}
+        </> : <>
+          <h3>Starters</h3>
+          {assignment.slice(0, 10).map((index, slot) => index >= 0
+            ? <RosterRow {...props} key={active[index].playerId} entry={active[index]} slot={slots[slot]}
+              fresh={active[index].lotId === freshLot} />
+            : <OpenSlot key={`slot-${slot}`} slot={slots[slot]} />)}
+          <h3>Bench <span>{bench.length}/10</span></h3>
+          {bench.map(index => (
+            <RosterRow {...props} key={active[index].playerId} entry={active[index]} slot=""
+              fresh={active[index].lotId === freshLot} />
+          ))}
+        </>}
         {(me.done || (onlyReserveOpen(entries) && me.budget >= 1)) && state.draft.status !== 'complete'
           && state.draft.status !== 'setup' && (
           <div className="skip-note">
@@ -706,7 +726,7 @@ export function ResultsPanel({ state }: RoomProps) {
       <div className="scroll">
         {view === 'sales' ? sales.map(entry => (
           <div className="result-row" key={entry.lotId}>
-            <strong>{findPlayer(state, entry.playerId)?.name}</strong>
+            <strong>{findPlayer(state, entry.playerId)?.name ?? entry.playerId}</strong>
             <span>{nameOf(state, entry.managerId)}</span>
             <b>{dollars(entry.price)}</b>
           </div>
@@ -738,7 +758,7 @@ function ConfirmButton({ label, confirmLabel, disabled, className, onConfirm, ti
 }
 function undoLabel(state: AuctionState) {
   const last = state.sales[0];
-  return last ? `Undo ${findPlayer(state, last.playerId)?.name} ${dollars(last.highBid)}?` : 'Undo?';
+  return last ? `Undo ${findPlayer(state, last.playerId)?.name ?? last.playerId} ${dollars(last.highBid)}?` : 'Undo?';
 }
 
 export function CommissionerBar({ state, busy, send }: RoomProps) {
@@ -746,17 +766,18 @@ export function CommissionerBar({ state, busy, send }: RoomProps) {
   if (d.status === 'setup' || d.status === 'complete') {
     return d.status === 'complete' && state.sales.length ? (
       <div className="commish">
-        <ConfirmButton className="ghost small" label="Undo last sale" confirmLabel={undoLabel(state)} disabled={busy}
-          onConfirm={() => void send({ type: 'undo' })} />
+        <ConfirmButton key={`undo-${state.sales[0]?.id ?? 'none'}`} className="ghost small" label="Undo last sale"
+          confirmLabel={undoLabel(state)} disabled={busy}
+          onConfirm={() => state.sales[0] && void send({ type: 'undo', lotId: state.sales[0].id })} />
       </div>
     ) : null;
   }
   return (
     <div className="commish">
-      <ConfirmButton className="ghost small" label="Undo last sale" confirmLabel={undoLabel(state)}
-        disabled={busy || !state.sales.length} title="Returns the player and refunds the price, then pauses"
-        onConfirm={() => void send({ type: 'undo' })} />
-      <ConfirmButton className="ghost small" label="Force end"
+      <ConfirmButton key={`undo-${state.sales[0]?.id ?? 'none'}`} className="ghost small" label="Undo last sale"
+        confirmLabel={undoLabel(state)} disabled={busy || !state.sales.length} title="Returns the player and refunds the price, then pauses"
+        onConfirm={() => state.sales[0] && void send({ type: 'undo', lotId: state.sales[0].id })} />
+      <ConfirmButton key={`force-${state.lot?.id ?? 'none'}`} className="ghost small" label="Force end"
         confirmLabel={state.lot ? `Sell to ${nameOf(state, state.lot.highBidderId)} ${dollars(state.lot.highBid)}?` : 'Sell?'}
         disabled={busy || !state.lot} title="Sell now to the high bidder"
         onConfirm={() => state.lot && void send({ type: 'force', lotId: state.lot.id })} />
@@ -772,7 +793,7 @@ export function turnsUntil(state: AuctionState, me: Manager) {
   const { status, phase, nominatorId } = state.draft;
   if (status !== 'running' && status !== 'paused') return null;
   if (nominatorId === me.id && phase === 'nomination') return 0;
-  if (!mayNominate(state, me)) return null;
+  if (!canNominate(state, me)) return null;
   const position = upcomingNominators(state).indexOf(me.id);
   return position < 0 ? null : position + 1;
 }

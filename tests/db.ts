@@ -4,7 +4,9 @@ import { act, claimSeat, getState, RuleError, restoreSeat } from "../lib/engine"
 import { checkLeague } from "../scripts/readiness";
 import { counts, matching, taxiEligibility } from "../lib/rules";
 import { loadEnvironment, safeError } from "../scripts/env";
-import { createIsolated, dropIsolated, seedManagers, seedPlayers, sleep, sql, syntheticPool } from "./support";
+import {
+    createIsolated, dropIsolated, seedManagers, seedPlayers, recordFixtureImport, sleep, sql, syntheticPool
+} from "./support";
 import leagueManagers from "../league/managers.json";
 import type { Action, AuctionState } from "../lib/types";
 let tokens: string[] = [];
@@ -195,15 +197,23 @@ async function main() {
             }, tokens[0])));
             assert.equal((await sql("SELECT * FROM events WHERE type='sale'")).rowCount, 1);
             const next = await nomination(await getState());
-            await Promise.allSettled([act({
-                    type: "undo"
+            const race = await Promise.allSettled([act({
+                    type: "undo", lotId: s.lot!.id
                 }, tokens[0]), act({
                     type: "force",
                     lotId: next.lot!.id
                 }, tokens[0])]);
             await invariants();
             const after = await getState();
-            assert.equal(after.draft.status, "paused");
+            if (race[0].status === 'fulfilled') {
+                assert.equal(after.draft.status, 'paused');
+                assert.equal(after.roster.length, 0);
+            } else {
+                assert(race[0].reason instanceof RuleError && race[0].reason.status === 409);
+                assert.equal(after.draft.status, 'running');
+                assert.equal(after.roster.length, 2);
+                assert(after.roster.some(entry => entry.lotId === next.lot!.id));
+            }
         });
         await run("real nomination timeout and real bid timer arithmetic", async () => {
             const s = await start(true);
@@ -267,14 +277,14 @@ async function main() {
             s = await force(s);
             const open = await nomination(s, "test-2", 10);
             await act({
-                type: "undo"
+                type: "undo", lotId: (await getState()).sales[0].id
             }, tokens[0]);
             let after = await getState();
             assert.equal(after.draft.status, "paused");
             assert.equal(after.roster.length, 1);
             assert.equal((await sql("SELECT status FROM lots WHERE id=$1", [open.lot!.id])).rows[0].status, "void");
             await act({
-                type: "undo"
+                type: "undo", lotId: (await getState()).sales[0].id
             }, tokens[0]);
             after = await getState();
             assert.equal(after.roster.length, 0);
@@ -528,6 +538,7 @@ async function main() {
         `, [extra, id, extra.slice(0, 3)]);
                 await sql("UPDATE managers SET budget=975 WHERE id=$1", [id]);
             }
+            await recordFixtureImport();
             const s = await start();
             assert.equal(s.draft.status, "complete");
             assert.equal(s.draft.completionReason, "no-eligible-managers");
@@ -542,10 +553,12 @@ async function main() {
     data=jsonb_set(jsonb_set(jsonb_set(data,'{careerGames}','100'),'{yearsExp}','10'),'{injuryStatus}','"IR"')
     WHERE id NOT IN (SELECT player_id FROM roster)
 `);
+            await recordFixtureImport();
             let s = await start();
             assert.equal(s.draft.status, "complete");
             await sql("UPDATE draft SET status='setup'");
             await sql("UPDATE players SET data=jsonb_set(data,'{injuryStatus}','\"Out\"') WHERE id='test-299'");
+            await recordFixtureImport();
             s = await start();
             assert.equal(s.draft.status, "running");
             s = await nomination(s, "test-299", 500);
@@ -556,6 +569,7 @@ async function main() {
         });
         await run("empty pool, full groups, exhausted budgets and append-only constraints", async () => {
             await sql("DELETE FROM players");
+            await recordFixtureImport();
             await reject({
                 type: "start"
             }, tokens[0]);

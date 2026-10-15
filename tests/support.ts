@@ -101,10 +101,16 @@ export async function seedManagers() {
     ORDER BY sequence
   `, [JSON.stringify(leagueManagers)]);
 }
+export async function recordFixtureImport() {
+    await sql(`INSERT INTO import_runs(started_at,sources,counts,coverage)
+        VALUES(clock_timestamp(),'["recorded-test-fixture"]',
+            jsonb_build_object('pool',(SELECT count(*) FROM players)),'{}')`);
+}
 export async function seedPlayers(players = syntheticPool()) {
     await sql(`
     INSERT INTO players(id,data) SELECT item->>'id',item FROM jsonb_array_elements($1::jsonb)
     item ON CONFLICT(id) DO UPDATE SET data=EXCLUDED.data
 `, [JSON.stringify(players)]);
+    await recordFixtureImport();
 }
 export const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));

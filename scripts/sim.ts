@@ -118,6 +118,15 @@ class DraftDriver {
         }
         return state;
     }
+    async undoLatest() {
+        for (let attempt = 0; attempt < 5; attempt++) {
+            const sale = (await this.state()).sales[0];
+            assert(sale, "An undo scenario must have a sale");
+            const accepted = await this.commissioner.action({ type: "undo", lotId: sale.id }, true);
+            if (accepted) return;
+        }
+        throw new Error("The latest sale kept changing during the undo scenario");
+    }
     available(state: AuctionState, managerId: number) {
         const manager = state.managers.find(m => m.id === managerId)!;
         const entries = state.roster.filter(e => e.managerId === managerId);
@@ -269,12 +278,8 @@ class DraftDriver {
         });
         state = await this.nominate();
         assert(state.lot && state.lot.id !== irLot);
-        await this.commissioner.action({
-            type: "undo"
-        });
-        await this.commissioner.action({
-            type: "undo"
-        });
+        await this.undoLatest();
+        await this.undoLatest();
         assert.equal((await this.state()).draft.status, "paused");
         await this.commissioner.action({
             type: "resume"
@@ -298,9 +303,7 @@ class DraftDriver {
             this.midDone.add("pause");
         }
         if (active >= this.midAt.undo && !this.midDone.has("undo")) {
-            await this.commissioner.action({
-                type: "undo"
-            });
+            await this.undoLatest();
             await this.commissioner.action({
                 type: "resume"
             });

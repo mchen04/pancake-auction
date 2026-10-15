@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { counts, fits, legalPlacements, matching, maxBid, slots } from '../lib/rules';
+import { counts, fits, legalPlacements, matching, maxBid, rankedDynastyAdp, slots } from '../lib/rules';
 import type { AuctionState, Entry, Player } from '../lib/types';
 
 export function seededFraction(seed: number, key: string) {
@@ -38,7 +38,8 @@ export class Strategy {
         const maximum = maxBid(manager.budget, player, entries, state.players);
         const spendable = Math.max(0, maximum - this.holdBudget);
         const projection = player.projection === null ? 2 : Math.max(0, player.projection);
-        const adpValue = player.adp !== null && player.adp > 0 ? 95 / Math.pow(player.adp + 8, 0.55) : 0;
+        const rank = rankedDynastyAdp(player.adp);
+        const adpValue = rank === null ? 0 : 95 / Math.pow(rank + 8, 0.55);
         const base = (projection * 1.7 + adpValue + 3) * this.bias;
         const noise = 0.72 + this.draw(`player:${player.id}`) * 0.65;
         const paced = (manager.budget - this.holdBudget) / openings;

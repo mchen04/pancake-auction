@@ -1,4 +1,14 @@
-import type { Entry, Placement, Player, Position } from "./types";
+import type { AuctionState, Entry, Manager, Placement, Player, Position } from "./types";
+export function rankedDynastyAdp(value: number | null): number | null {
+    return value !== null && value > 0 && value < 999 ? value : null;
+}
+export function canNominate(state: AuctionState, manager: Manager | undefined): boolean {
+    if (!manager || manager.done) return false;
+    const sold = new Set(state.roster.map(entry => entry.playerId));
+    const entries = state.roster.filter(entry => entry.managerId === manager.id);
+    return state.players.some(player => !sold.has(player.id)
+        && maxBid(manager.budget, player, entries, state.players) >= 1);
+}
 export const slots = [
     "PG",
     "SG",
@@ -67,9 +77,11 @@ export function counts(entries: Entry[]) {
 export function legalPlacements(player: Player, entries: Entry[], players: Player[]): Placement[] {
     const count = counts(entries);
     const result: Placement[] = [];
-    const active = entries.filter(e => e.placement === "active").map(e => players.find(p => p.id === e.playerId));
-    if (count.active < 20 && active.every(p => p !== undefined) && matching([...active as Player[], player])) {
-        result.push("active");
+    if (count.active < 20) {
+        const active = entries.filter(e => e.placement === "active").map(e => players.find(p => p.id === e.playerId));
+        if (active.every(p => p !== undefined) && matching([...active as Player[], player])) {
+            result.push("active");
+        }
     }
     if (count.taxi < 3 && taxiEligibility(player) === "eligible") {
         result.push("taxi");

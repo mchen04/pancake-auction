@@ -4,7 +4,8 @@ import type { Action, AuctionState, Player } from "../lib/types";
 const raceReasons = new Set([
     'Draft is paused', 'Draft is not in progress', 'It is not your nomination turn',
     'Player is no longer available', 'This lot has ended. Refresh and try the current lot.',
-    'Bid arrived after the deadline', 'The high bidder cannot give up', 'You already gave up on this player'
+    'Bid arrived after the deadline', 'The high bidder cannot give up', 'You already gave up on this player',
+    'The latest sale has changed. Review it before undoing.'
 ]);
 export class Bot {
     cookie = "";
@@ -54,15 +55,13 @@ export class Bot {
         await this.state();
     }
     async state(): Promise<AuctionState> {
-        const omitPool = this.players.length && this.latest?.draft.status !== "setup";
-        const state: AuctionState = await this.call(omitPool ? "state?players=0" : "state");
+        const revision = this.latest?.poolRevision;
+        const query = revision === undefined ? 'state' : `state?poolRevision=${encodeURIComponent(revision)}`;
+        const state: AuctionState = await this.call(query);
         assert(state);
         assert.equal(state.me, this.id);
-        if (omitPool) {
-            state.players = this.players;
-        }
-        else
-            this.players = state.players;
+        if (revision === state.poolRevision) state.players = this.players;
+        else this.players = state.players;
         this.latest = state;
         return state;
     }

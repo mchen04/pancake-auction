@@ -19,7 +19,10 @@ async function main() {
         ["lint"],
         ["test"],
         ["test:db"],
+        ["test:ui"],
+        ["test:volume"],
         ["build"],
+        ["test:room"],
         [
             "sim",
             "--",

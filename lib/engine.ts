@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomInt } from "node:crypto";
 import type { PoolClient } from "pg";
 import { begin, dbNow, schemaName } from "./db";
-import { counts, legalPlacements, maxBid, nextDeadline, placementMax } from "./rules";
+import { canNominate, counts, legalPlacements, maxBid, nextDeadline, placementMax } from "./rules";
 import type { Action, AuctionState, Draft, Entry, Lot, Manager, Player } from "./types";
 export class RuleError extends Error {
     constructor(message: string, public status = 422) {
@@ -19,15 +19,19 @@ const lotFrom = (r: Record<string, unknown>): Lot => ({
     highBid: Number(r.high_bid),
     status: String(r.status)
 });
-const playerCache = new Map<string, Player[]>();
+const playerCache = new Map<string, { revision: string; players: Player[] }>();
 async function load(client: PoolClient, token?: string): Promise<AuctionState> {
     const cached = playerCache.get(schemaName());
-    const all = (await client.query(`SELECT
+    const all = (await client.query(`WITH pool_revision AS (
+      SELECT COALESCE((SELECT id::text FROM import_runs
+        WHERE finished_at IS NOT NULL ORDER BY import_runs.id DESC LIMIT 1),'0') AS value
+    ) SELECT
+    (SELECT value FROM pool_revision) AS pool_revision,
     (SELECT row_to_json(d) FROM draft d WHERE id=1) AS draft,
     COALESCE((SELECT json_agg(m ORDER BY id) FROM
       (SELECT id,name,commissioner,budget,done,token_hash IS NOT NULL AS claimed,token_hash FROM managers) m),
       '[]') AS managers,
-    CASE WHEN ${cached ? "(SELECT status FROM draft WHERE id=1) <> 'setup'" : "false"}
+    CASE WHEN (SELECT value FROM pool_revision) = $1
       THEN NULL ELSE COALESCE((SELECT json_agg(data ORDER BY
       (data->>'projection')::double precision DESC NULLS LAST,id) FROM players),'[]') END AS players,
     COALESCE((SELECT json_agg(r ORDER BY lot_id) FROM roster r),'[]') AS roster,
@@ -38,7 +42,7 @@ async function load(client: PoolClient, token?: string): Promise<AuctionState> {
       (SELECT * FROM lots WHERE status='sold' ORDER BY id DESC LIMIT 30) l),'[]') AS sales,
     COALESCE((SELECT json_agg(e ORDER BY id DESC) FROM
       (SELECT * FROM events ORDER BY id DESC LIMIT 30) e),'[]') AS events,
-    extract(epoch FROM clock_timestamp()) * 1000 AS now`)).rows[0];
+    extract(epoch FROM clock_timestamp()) * 1000 AS now`, [cached?.revision ?? null])).rows[0];
     const r = all.draft;
     const draft: Draft = {
         status: r.status,
@@ -66,9 +70,9 @@ async function load(client: PoolClient, token?: string): Promise<AuctionState> {
         delete m.token_hash;
         return m;
     });
-    const players: Player[] = all.players ?? cached;
+    const players: Player[] = all.players ?? cached!.players;
     if (all.players) {
-        playerCache.set(schemaName(), players);
+        playerCache.set(schemaName(), { revision: all.pool_revision, players });
     }
     const roster: Entry[] = all.roster.map((r: Record<string, unknown>) => ({
         playerId: String(r.player_id),
@@ -78,6 +82,7 @@ async function load(client: PoolClient, token?: string): Promise<AuctionState> {
         lotId: Number(r.lot_id)
     }));
     const lot = all.lot ? lotFrom(all.lot) : null;
+    if (lot) lot.player = players.find(player => player.id === lot.playerId);
     const passes: number[] = all.passes;
     const sales: Lot[] = all.sales.map(lotFrom);
     const recentEvents = all.events.map((e: Record<string, unknown>) => ({
@@ -89,6 +94,7 @@ async function load(client: PoolClient, token?: string): Promise<AuctionState> {
         at: new Date(String(e.created_at)).getTime()
     }));
     return {
+        poolRevision: all.pool_revision,
         draft,
         managers,
         players,
@@ -138,9 +144,6 @@ function team(s: AuctionState, id: number) {
 function available(s: AuctionState) {
     const sold = new Set(s.roster.map(e => e.playerId));
     return s.players.filter(p => !sold.has(p.id));
-}
-function canNominate(s: AuctionState, m: Manager) {
-    return !m.done && available(s).some(p => maxBid(m.budget, p, team(s, m.id), s.players) >= 1);
 }
 function out(s: AuctionState, m: Manager) {
     if (!s.lot) {
@@ -200,12 +203,14 @@ async function turn(client: PoolClient, s: AuctionState, from: number, now: numb
     }
 }
 async function award(client: PoolClient, s: AuctionState, reason: "deadline" | "all-out" | "force", now: number) {
+    if (s.draft.status !== "running" && reason !== "force") return;
     const lot = s.lot;
     if (!lot || lot.status !== "open") {
         return;
     }
     const m = s.managers.find(m => m.id === lot.highBidderId)!;
-    const player = s.players.find(p => p.id === lot.playerId)!;
+    const player = s.players.find(p => p.id === lot.playerId);
+    if (!player) throw new RuleError("Player is no longer available", 409);
     const entries = team(s, m.id);
     const placement = legalPlacements(player, entries, s.players).find(p => placementMax(m.budget, entries,
         p) >= lot.highBid);
@@ -462,6 +467,9 @@ export async function act(action: Action, token?: string) {
             if (!sale) {
                 throw new RuleError("There is no sale to undo", 409);
             }
+            if (action.lotId !== Number(sale.id)) {
+                throw new RuleError("The latest sale has changed. Review it before undoing.", 409);
+            }
             const undone = lotFrom(sale);
             if (s.lot) {
                 await client.query("UPDATE lots SET status='void' WHERE id=$1", [s.lot.id]);
@@ -551,11 +559,11 @@ export async function act(action: Action, token?: string) {
                 from: entry.placement,
                 to: action.placement
             }, now);
-            entry.placement = action.placement;
-            if (s.lot && s.managers.every(other => other.id === s.lot!.highBidderId || out(s, other))) {
-                await award(client, s, "all-out", now);
+            if (entry.placement !== action.placement) {
+                d.passedTurns = d.passedTurns.filter(id => id !== m.id);
             }
-            else if (d.status === "running") {
+            entry.placement = action.placement;
+            if (d.status === "running") {
                 await advance(client, s, now);
             }
             return;

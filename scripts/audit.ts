@@ -262,6 +262,7 @@ export class Replay {
                 this.forced = this.requireLot(event).id;
                 break;
             case "sale": {
+                assert(!this.paused || data.reason === "force");
                 const lot = this.requireLot(event);
                 const player = this.player(lot.playerId);
                 assert.equal(id, lot.bidder);
@@ -318,6 +319,7 @@ export class Replay {
                 assert.equal(data.from, entry.placement);
                 const rest = this.team(id).filter(e => e !== entry);
                 assert(this.placements(id, this.player(entry.playerId), rest).includes(data.to as Placement));
+                if (entry.placement !== data.to) this.passedTurns.delete(id);
                 entry.placement = data.to as Placement;
                 assert(this.budgets.get(id)! >= 20 - this.count(this.team(id), "active"));
                 if (this.lot?.bidder === id) {

@@ -29,7 +29,7 @@ EVIDENCE_DIR=/absolute/path/outside/repo npm run sim -- --runs 3 --timing fast -
 EVIDENCE_DIR=/absolute/path/outside/repo npm run sim -- --runs 1 --timing real --seed 42
 ```
 
-`verify` runs typecheck, lint, unit tests, database tests, production build, three fast full drafts, and one real-timing full draft. It records each exit code and log path. Simulations build and start the production app on a free port. They copy the live imported pool into fresh `sim_*` schemas. Without an import, they label the synthetic fallback. Ten independent HTTP clients claim ten seats and poll concurrently. A separate process restores a saved seat token during each run. The event replay checker independently recomputes budgets, matching, eligibility, bidding, timers, sales, placement moves, and turn rotation.
+`verify` runs typecheck, lint, unit tests, database tests, component browser regressions, query-volume checks, production build, a browser import-and-sale regression, three fast full drafts, and one real-timing full draft. It records each exit code and log path. Simulations build and start the production app on a free port. They copy the live imported pool into fresh `sim_*` schemas. Without an import, they label the synthetic fallback. Ten independent HTTP clients claim ten seats and poll concurrently. A separate process restores a saved seat token during each run. The event replay checker independently recomputes budgets, matching, eligibility, bidding, timers, sales, placement moves, and turn rotation.
 
 Tests use `test_*` schemas and recorded import fixtures. They never call Sleeper. Both tools drop their own schemas, even on failure. `--keep-schema` preserves a schema for inspection. Fast timing uses 3/3/1.5/4.5 seconds and 150 ms polling. Real runs retain 500 ms polling. Real timing uses 10/10/5/15 seconds. Database tests exercise real nomination and bid expiry. Synthetic fixture setup uses longer clocks for unrelated races.
 
@@ -38,6 +38,7 @@ Tests use `test_*` schemas and recorded import fixtures. They never call Sleeper
 Set `PANCAKE_AUCTION_ENV_FILE` to an authorized local environment file containing `DATABASE_URL` and `DATABASE_URL_POOLED`.
 Use a disposable local PostgreSQL database with an already migrated and imported `auction` schema.
 Set `EVIDENCE_DIR` outside the repository, then run `npm run verify`.
+The installed `agent-browser` CLI supplies the separate headless Chromium checks.
 Verification reads the source pool and creates isolated `test_*` and `sim_*` schemas, which it drops afterward.
 It leaves the source schema unchanged. No remote credentials or network import are needed.
 
@@ -69,19 +70,19 @@ Active contains PG, SG, SF, PF, C, G, F, three UTIL, and ten bench slots. G acce
 
 Taxi has three places. A rookie (`years_exp=0`) qualifies. A non-rookie qualifies with a complete career total below 65 games. A lower bound of 65 or more fails. A smaller incomplete lower bound or missing total is unknown and fails. IR has two places. Only the exact stored injury status `Out` qualifies. `IR`, `DTD`, `GTD`, `Questionable`, `Doubtful`, and null fail.
 
-A manager with a full active roster can still bid and nominate eligible Taxi or Out players. Their maximum is the full remaining budget. With active openings, a taxi/IR placement reserves $1 for every active opening. Taxi and IR can remain empty. Full groups, empty eligible pools, exhausted budgets, explicit Done choices, and a full cycle of timeout passes terminate without deadlock. Each nomination clears the passed-turn cycle. Taxi/IR-only teams keep their turns unless they choose Done or have no legal nomination. The event log records each passed turn and the completion reason.
+A manager with a full active roster can still bid and nominate eligible Taxi or Out players. Their maximum is the full remaining budget. With active openings, a taxi/IR placement reserves $1 for every active opening. Taxi and IR can remain empty. Full groups, empty eligible pools, exhausted budgets, explicit Done choices, and a full cycle of timeout passes terminate without deadlock. Each nomination clears the passed-turn cycle. A roster move clears that manager’s earlier pass because their legal nominations can change. Taxi/IR-only teams keep their turns unless they choose Done or have no legal nomination. The event log records each passed turn and the completion reason.
 
-Pause stores the exact remaining milliseconds. Resume adds that amount to the database clock. Undo removes the most recent live sale from its current placement and refunds the price. It returns the player, voids the open lot and all its bids through the lot status, restores the undone nominator, clears that manager's done flag, and pauses. Undo repeats through the sale stack. Bid and event records remain for audit. Force-end awards the current high bid immediately, including while paused.
+Pause stores the exact remaining milliseconds. Resume adds that amount to the database clock. Undo targets the sale shown in its confirmation. A changed latest sale produces a 409 instead of undoing another sale. Undo removes the confirmed sale from its current placement and refunds the price. It returns the player, voids the open lot and all its bids through the lot status, restores the undone nominator, clears that manager's done flag, and pauses. Undo repeats through the sale stack. Bid and event records remain for audit. Automatic awards wait while paused. Resume evaluates expiry and all-out under the draft lock. Force-end awards the current high bid immediately, including while paused.
 
 ## Database and clock
 
-Every mutation locks the singleton draft row in one transaction. It validates the current lot ID and the seat token. Expired reads acquire the same lock and advance the room. Reads with no expired deadline use a consistent database snapshot without locking the draft row. The immutable player pool is cached from PostgreSQL while drafting. Polls can omit that pool after the first response. No decision uses a client or app-server clock. Responses include the database time for countdown display.
+Every mutation locks the singleton draft row in one transaction. It validates the current lot ID and the seat token. Expired reads acquire the same lock and advance the room. Reads with no expired deadline use a consistent database snapshot without locking the draft row. The player cache is keyed by the latest completed database import ID. Each state read checks that revision without transferring unchanged players. Clients send their pool revision and receive players only when it differs, so open rooms and warm server processes see setup imports. Current lots also carry player details; missing pool entries render a safe fallback. No decision uses a client or app-server clock. Responses include the database time for countdown display.
 
 Constraints enforce one open lot, one live sale per player, unique passes, and increasing bids. Events record every nomination, bid, pass, sale, placement, pause/resume, undo, and force-end. Database timestamps and decision times permit replay. A trigger rejects event updates and deletes. Plain SQL migrations track applied filenames in the selected schema.
 
 ## Data sources and gaps
 
-The explicit importer makes fifteen sequential public requests with a descriptive User-Agent and a small delay. Dry-run performs no database writes. With `EVIDENCE_DIR`, it saves a public response snapshot outside the repository. Apply reuses that snapshot within 24 hours. This avoids a second players request. Without an evidence directory, each invocation fetches again. Sleeper asks callers to fetch the players endpoint at most once per day and stay below 1,000 calls per minute. Apply locks the draft and refuses after any lot exists or the state leaves setup. There is no override. All player updates and the import record commit together.
+The explicit importer makes fifteen sequential public requests with a descriptive User-Agent and a small delay. Dry-run performs no database writes. With `EVIDENCE_DIR`, it saves a public response snapshot outside the repository. Snapshots and individual source caches store their original fetch time. Apply reuses them for less than 24 hours from that time; reuse never updates their age or file. This avoids a second players request. Without an evidence directory, each invocation fetches again. Sleeper asks callers to fetch the players endpoint at most once per day and stay below 1,000 calls per minute. Apply locks the draft and refuses after any lot exists or the state leaves setup. There is no override. All player updates and the import record commit together.
 
 Sources:
 
@@ -91,6 +92,8 @@ Sources:
 - Thirteen career seasons: `https://api.sleeper.app/v1/stats/nba/regular/<season>`, for 2013 through 2025.
 
 Players require a valid PG/SG/SF/PF/C fantasy position, an active flag, and a team, projection, or dynasty ADP. Defense entries are excluded. Display positions do not replace fantasy eligibility. Source ADP values, including zero values, are preserved. Some active free agents have ADP without a stat forecast and therefore remain in the pool.
+
+None of the snapshot’s 1,858 ADP values are non-positive, so zero is not established as a valid rank. Real ranks span 1.3–699; 1,022 entries jump to the 999 sentinel, including 1,016 imported pool players. Null, non-positive, and ≥999 values show “?” with an “Unranked by Sleeper” tooltip, sort last, and add no ADP valuation.
 
 Projected stats are per game. Scoring is PTS +1, REB +1, AST +2, STL +4, BLK +4, 3PM +1, FGM +2, FGA −1, FTM +1, FTA −1, TO −2. Sleeper calls threes `tpm` and turnovers `to`. The supplied scoring example produces 41. A missing stat line produces a null projection, displayed as “no projection.” Raw stats and dynasty ADP stay stored. Age uses Sleeper age first, then a valid birth_date at import time. Missing age and birth_date produce “age unknown.”
 

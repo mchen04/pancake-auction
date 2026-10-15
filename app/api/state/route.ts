@@ -6,7 +6,10 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest) {
     try {
         const state = await getState(requestToken(request));
-        if (request.nextUrl.searchParams.get("players") === "0") {
+        const revision = request.nextUrl.searchParams.get("poolRevision");
+        const omitPool = revision === state.poolRevision
+            || revision === null && request.nextUrl.searchParams.get("players") === "0";
+        if (omitPool) {
             state.players = [];
         }
         return NextResponse.json(state, {

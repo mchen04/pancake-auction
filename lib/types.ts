@@ -54,6 +54,7 @@ export interface Lot {
     highBidderId: number;
     highBid: number;
     status: string;
+    player?: Player;
 }
 export interface RecentEvent {
     id: string;
@@ -64,6 +65,7 @@ export interface RecentEvent {
     at: number;
 }
 export interface AuctionState {
+    poolRevision: string;
     draft: Draft;
     managers: Manager[];
     players: Player[];
@@ -76,7 +78,10 @@ export interface AuctionState {
     me: number | null;
 }
 export type Action = {
-    type: "start" | "pause" | "resume" | "undo";
+    type: "start" | "pause" | "resume";
+} | {
+    type: "undo";
+    lotId: number;
 } | {
     type: "done";
     done: boolean;

@@ -8,6 +8,7 @@ import managers from '../league/managers.json';
 
 function state(): AuctionState {
     return {
+        poolRevision: "fixture",
         players: syntheticPool(), roster: [], passes: [], sales: [], recentEvents: [], serverNow: 1000, me: 1,
         managers: managers.map((manager, index) => ({
             id: index + 1, ...manager,

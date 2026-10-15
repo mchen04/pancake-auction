@@ -26,21 +26,21 @@ export default function Room() {
   const [tab, setTab] = useState<Tab>('players');
   const [opening, setOpening] = useState(1);
   const [turnSeen, setTurnSeen] = useState('');
-  const players = useRef<Player[]>([]);
+  const pool = useRef<{ revision: string; players: Player[] } | null>(null);
   const fetching = useRef<Promise<void> | null>(null);
   const pending = useRef(false);
 
   const fetchState = useCallback(async () => {
     if (fetching.current) return fetching.current;
     const sent = Date.now();
-    const includePool = players.current.length === 0;
+    const query = pool.current ? `?poolRevision=${encodeURIComponent(pool.current.revision)}` : '';
     const request = async () => {
       try {
-        const response = await fetch(`/api/state${includePool ? '' : '?players=0'}`, { cache: 'no-store' });
+        const response = await fetch(`/api/state${query}`, { cache: 'no-store' });
         if (!response.ok) throw new Error('Connection lost');
         const next: AuctionState = await response.json();
-        if (includePool) players.current = next.players;
-        else next.players = players.current;
+        if (pool.current?.revision === next.poolRevision) next.players = pool.current.players;
+        else pool.current = { revision: next.poolRevision, players: next.players };
         setOffset(next.serverNow - (sent + Date.now()) / 2);
         setState(next);
         setConnected(true);
