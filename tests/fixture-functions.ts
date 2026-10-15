@@ -3,18 +3,10 @@ import { internalMutation, mutation } from '../convex/_generated/server';
 import { draftRecord, load, Store } from '../convex/engine';
 import type { Draft, Entry } from '../lib/types';
 
-export const contend = mutation({ args: { reads: v.number() }, handler: async (ctx, args) => {
-    const row = await ctx.db.query('managers').withIndex('id', q => q.eq('id', 1)).unique();
+export const interfereDraft = mutation({ args: {}, handler: async ctx => {
+    const row = await draftRecord(ctx);
     if (!row) throw new Error('Initialize the contention fixture');
-    for (let index = 0; index < args.reads; index++) await ctx.db.get(row._id);
-    await ctx.db.patch(row._id, { budget: row.budget + 1 });
-    return row.budget + 1;
-} });
-
-export const interfere = mutation({ args: {}, handler: async ctx => {
-    const row = await ctx.db.query('managers').withIndex('id', q => q.eq('id', 1)).unique();
-    if (!row) throw new Error('Initialize the contention fixture');
-    await ctx.db.patch(row._id, { budget: row.budget + 1 });
+    await ctx.db.patch(row._id, { version: row.version + 1 });
 } });
 
 export const queryFailure = internalMutation({ args: { enabled: v.boolean() }, handler: async (ctx, args) => {

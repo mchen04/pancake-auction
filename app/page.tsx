@@ -6,7 +6,6 @@ import {
   BlockPanel, CommissionerBar, PoolPanel, ResultsPanel, RosterPanel, TeamsPanel, turnsUntil
 } from './components';
 import type { Action, AuctionState, Manager, Player } from '../lib/types';
-import { mutationErrorMessage, retryAbortedMutation } from '../lib/mutation-retry';
 
 type Tab = 'players' | 'teams' | 'roster' | 'results';
 const tabs: [Tab, string][] = [['players', 'Players'], ['teams', 'Teams'], ['roster', 'My roster'], ['results', 'Results']];
@@ -51,7 +50,7 @@ export default function Room() {
       const saved = localStorage.getItem('pancake-seat') || undefined;
       if (saved) {
         try {
-          const result = await retryAbortedMutation(() => restore({ token: saved }));
+          const result = await restore({ token: saved });
           if (result.ok && !cancelled) setToken(saved);
           else if (!result.ok && result.status === 401) localStorage.removeItem('pancake-seat');
         } catch {
@@ -93,13 +92,11 @@ export default function Room() {
     setBusy(true);
     setError('');
     try {
-      const { result, sent, received } = await retryAbortedMutation(async () => {
-        const sent = Date.now();
-        const result = endpoint === 'claim' && 'managerId' in body
-          ? await claim({ managerId: body.managerId })
-          : 'type' in body ? await mutate({ token: token || '', action: body }) : null;
-        return { result, sent, received: Date.now() };
-      });
+      const sent = Date.now();
+      const result = endpoint === 'claim' && 'managerId' in body
+        ? await claim({ managerId: body.managerId })
+        : 'type' in body ? await mutate({ token: token || '', action: body }) : null;
+      const received = Date.now();
       if (!result) throw new Error('Invalid action');
       setOffset(result.serverNow - (sent + received) / 2);
       if (!result.ok) throw new Error(result.error);
@@ -108,7 +105,7 @@ export default function Room() {
         setToken(result.value);
       }
     } catch (failure) {
-      setError(mutationErrorMessage(failure));
+      setError(failure instanceof Error ? failure.message : 'Request failed');
     } finally {
       setBusy(false);
       pending.current = false;
