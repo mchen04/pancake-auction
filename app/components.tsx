@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { counts, legalPlacements, matching, maxBid, slots, taxiEligibility } from '../lib/rules';
 import type { Action, AuctionState, Draft, Entry, Manager, Placement, Player, RecentEvent } from '../lib/types';
 
@@ -11,290 +11,522 @@ export interface RoomProps {
   connected: boolean;
   send: (action: Action) => Promise<void>;
 }
+
+const placementLabels: Record<Placement, string> = { active: 'Active', taxi: 'Taxi', ir: 'IR' };
+const statLabels: [string, string[]][] = [
+  ['PTS', ['pts']], ['REB', ['reb']], ['AST', ['ast']], ['STL', ['stl']], ['BLK', ['blk']],
+  ['3PM', ['tpm', 'fg3m']], ['FGM', ['fgm']], ['FGA', ['fga']], ['FTM', ['ftm']], ['FTA', ['fta']], ['TO', ['to', 'tov']]
+];
+
+function findPlayer(state: AuctionState, id: string | undefined) {
+  return state.players.find(player => player.id === id);
+}
+function entriesOf(state: AuctionState, managerId: number | null) {
+  return state.roster.filter(entry => entry.managerId === managerId);
+}
+function nameOf(state: AuctionState, managerId: number | null | undefined) {
+  return state.managers.find(manager => manager.id === managerId)?.name ?? 'Unknown';
+}
+function timeoutPick(state: AuctionState, manager: Manager | undefined) {
+  if (!manager) return undefined;
+  const entries = entriesOf(state, manager.id);
+  const sold = new Set(state.roster.map(entry => entry.playerId));
+  return state.players.find(player => !sold.has(player.id)
+    && maxBid(manager.budget, player, entries, state.players) >= 1);
+}
+function timeoutText(state: AuctionState, manager: Manager | undefined) {
+  if (manager && onlyReserveOpen(entriesOf(state, manager.id))) return 'Time out: the turn passes.';
+  const pick = timeoutPick(state, manager);
+  return pick ? `Time out: ${pick.name} opens at $1.` : 'Time out: the turn passes.';
+}
+function mayNominate(state: AuctionState, manager: Manager | undefined) {
+  if (!manager || manager.done || manager.budget < 1) return false;
+  const c = counts(entriesOf(state, manager.id));
+  return c.active < 20 || c.taxi < 3 || c.ir < 2;
+}
+function upcomingNominators(state: AuctionState) {
+  const { order, turnIndex } = state.draft;
+  return Array.from({ length: order.length - 1 }, (_, step) => order[(turnIndex + step + 1) % order.length])
+    .filter(id => mayNominate(state, state.managers.find(candidate => candidate.id === id)));
+}
+function nextNominator(state: AuctionState) {
+  return upcomingNominators(state)[0] ?? null;
+}
+function onlyReserveOpen(entries: Entry[]) {
+  const c = counts(entries);
+  return c.active === 20 && (c.taxi < 3 || c.ir < 2);
+}
+
+const courtOrder = ['PG', 'SG', 'SF', 'PF', 'C', 'G', 'F'];
+export function positionsLabel(player: Player) {
+  return [...player.positions].sort((a, b) => courtOrder.indexOf(a) - courtOrder.indexOf(b)).join('/');
+}
 export function careerLabel(player: Player) {
   if (player.careerGames === null) return 'unknown';
-  return player.careerGamesComplete ? String(player.careerGames) : `≥ ${player.careerGames}`;
+  return player.careerGamesComplete ? String(player.careerGames) : `≥${player.careerGames}`;
 }
-export function projectionLabel(player: Player) {
-  return player.projection === null ? 'no projection' : `${player.projection.toFixed(1)} FPPG`;
+function ageLabel(player: Player) {
+  return player.age === null ? 'unknown' : String(player.age);
 }
-export function Badges({ player }: { player: Player }) {
+function Cell({ value, unknown, className = '' }: { value: string; unknown: string | null; className?: string }) {
+  return unknown ? <span className="muted" title={unknown}>?</span> : <span className={className}>{value}</span>;
+}
+function projectionLabel(player: Player) {
+  return player.projection === null ? 'none' : player.projection.toFixed(1);
+}
+
+function InjuryTag({ status }: { status: string | null }) {
+  if (!status) return null;
+  return <span className={`tag injury ${status === 'Out' || status === 'IR' ? 'severe' : ''}`}>{status}</span>;
+}
+function EligibilityTags({ player }: { player: Player }) {
   const taxi = taxiEligibility(player);
   return (
-    <span className="badges">
-      {player.yearsExp === 0 && <b>Rookie</b>}
-      {player.yearsExp !== 0 && taxi === 'eligible' && <b>&lt;65 GP</b>}
-      {taxi === 'unknown' && <b className="muted">Unknown GP</b>}
-      {player.injuryStatus === 'Out' && <b className="out">Out</b>}
-    </span>
+    <>
+      {player.yearsExp === 0 && <span className="tag taxi" title="Rookie: taxi eligible">Rookie</span>}
+      {player.yearsExp !== 0 && taxi === 'eligible' && (
+        <span className="tag taxi" title="Under 65 career games: taxi eligible">&lt;65 GP</span>
+      )}
+    </>
   );
 }
-export function PlayerInfo({ player }: { player: Player }) {
+
+function taxiReason(player: Player) {
+  const taxi = taxiEligibility(player);
+  if (player.yearsExp === 0) return 'Yes, rookie';
+  if (taxi === 'eligible') return 'Yes, under 65 career games';
+  if (taxi === 'ineligible') return 'No, 65 or more career games';
+  return 'No, career games are not fully known';
+}
+function careerDetail(player: Player) {
+  if (player.careerGames === null) return 'Unknown: Sleeper has no season data for him';
+  if (player.careerGamesComplete) return null;
+  return 'Counted from 2013–14 only, so the total is a minimum';
+}
+function statValue(stats: Record<string, number>, keys: string[]) {
+  const key = keys.find(candidate => stats[candidate] !== undefined);
+  return key === undefined ? null : stats[key];
+}
+
+export function PlayerDetails({ player }: { player: Player }) {
+  const stats = player.projectedStats;
   return (
-    <div className="player-summary">
-      <small>
-        {player.positions.join('/')} · {player.team || 'team unknown'} ·{' '}
-        {player.age === null ? 'age unknown' : `age ${player.age}`}
-      </small>
-      <small>
-        Injury: {player.injuryStatus || 'unknown'} · Career GP: {careerLabel(player)}
-      </small>
-      <small>{projectionLabel(player)}</small>
-      <Badges player={player} />
+    <div className="details">
+      {stats ? (
+        <>
+        <p className="details-label">Projected per game, 2026–27 season</p>
+        <dl className="stat-line">
+          {statLabels.map(([label, keys]) => {
+            const value = statValue(stats, keys);
+            return value === null ? null : (
+              <div key={label}><dt>{label}</dt><dd>{value.toFixed(1)}</dd></div>
+            );
+          })}
+        </dl>
+        </>
+      ) : <p className="muted">No 2026–27 projection from Sleeper.</p>}
+      <dl className="facts">
+        <dt>Taxi</dt><dd>{taxiReason(player)}</dd>
+        <dt>IR</dt><dd>{player.injuryStatus === 'Out' ? 'Yes, listed Out' : 'No, not listed Out'}</dd>
+        {careerDetail(player) && <><dt>Career games</dt><dd>{careerDetail(player)}</dd></>}
+        <dt>NBA seasons</dt><dd>{player.yearsExp === null ? 'unknown' : player.yearsExp}</dd>
+        <dt className="phone-only">Dynasty ADP</dt>
+        <dd className="phone-only">{player.adp ? player.adp.toFixed(1) : 'unknown'}</dd>
+      </dl>
     </div>
   );
 }
-function taxiReason(player: Player) {
-  if (player.yearsExp === 0) return 'Eligible: stored experience marks a rookie.';
-  if (taxiEligibility(player) === 'eligible') return 'Eligible: complete career total is below 65.';
-  if (taxiEligibility(player) === 'unknown') return 'Ineligible: the career total is unknown or incomplete.';
-  return 'Ineligible: career games are at least 65.';
-}
-export function PlayerDetails({ player }: { player: Player }) {
+
+export function PlayerLine({ player }: { player: Player }) {
   return (
-    <details className="player-details">
-      <summary>Player details</summary>
-      <p>Dynasty ADP: {player.adp === null ? 'unknown' : player.adp}</p>
-      <p>Career coverage: {player.careerGamesComplete ? 'complete, 2013–2025' : 'incomplete, 2013–2025'}</p>
-      <p>Taxi: {taxiReason(player)}</p>
-      <p>IR: {player.injuryStatus === 'Out' ? 'Eligible: status is exactly Out.' : 'Ineligible: status must be Out.'}</p>
-      {player.projectedStats ? (
-        <dl className="stat-line">
-          {Object.entries(player.projectedStats).map(([stat, value]) => (
-            <div key={stat}><dt>{stat}</dt><dd>{value}</dd></div>
-          ))}
-        </dl>
-      ) : <p>No projected per-game stat line.</p>}
-    </details>
+    <div className="player-line">
+      <span>{positionsLabel(player)}</span>
+      <span>{player.team ?? 'No team'}</span>
+      <span>Age {ageLabel(player)}</span>
+      <span>{careerLabel(player)} GP</span>
+      <span>Proj {projectionLabel(player)}</span>
+      <InjuryTag status={player.injuryStatus} />
+      <EligibilityTags player={player} />
+    </div>
   );
 }
-export function Countdown({ draft, offset }: { draft: Draft; offset: number }) {
+
+function remainingMs(draft: Draft, clock: number, offset: number) {
+  if (draft.status === 'paused') return draft.remainingMs ?? 0;
+  if (draft.status !== 'running' || draft.deadline === null) return null;
+  return Math.max(0, draft.deadline - clock - offset);
+}
+export function ShotClock({ draft, offset }: { draft: Draft; offset: number }) {
   const [clock, setClock] = useState(0);
   useEffect(() => {
     setClock(Date.now());
     const tick = setInterval(() => setClock(Date.now()), 100);
     return () => clearInterval(tick);
   }, []);
-  const remaining = draft.status === 'paused'
-    ? draft.remainingMs || 0
-    : Math.max(0, (draft.deadline || 0) - clock - offset);
-  const hidden = draft.status === 'setup' || draft.status === 'complete';
-  const urgent = remaining < 3000 && draft.status === 'running';
+  const remaining = remainingMs(draft, clock, offset);
+  const total = draft.phase === 'bidding' ? draft.capMs : draft.nominationMs;
+  const urgent = remaining !== null && remaining < 4000 && draft.status === 'running';
+  const digits = remaining === null ? '--' : remaining >= 10000
+    ? String(Math.ceil(remaining / 1000)) : (remaining / 1000).toFixed(1);
+  if (draft.status === 'setup' || draft.status === 'complete') return null;
+  const caption = draft.status === 'paused' ? 'Paused' : draft.phase === 'bidding' ? 'Bid clock' : 'Nominate';
   return (
-    <div className={`countdown ${urgent ? 'urgent' : ''}`}>
-      {hidden ? '—' : (remaining / 1000).toFixed(1)}
-      <small>{draft.status === 'paused' ? 'clock frozen' : 'seconds'}</small>
+    <div className={`shot-clock ${urgent ? 'urgent' : ''} ${draft.status === 'paused' ? 'frozen' : ''}`}
+      role="timer" aria-label={`${caption}: ${digits} seconds`}>
+      <span className="digits">{digits}</span>
+      <span className="caption">{caption}</span>
+      <span className="drain" style={{ width: `${remaining === null ? 0 : Math.min(100, remaining / total * 100)}%` }} />
     </div>
   );
 }
-function nominationReason(props: RoomProps, player: Player, opening: number) {
+
+function nominationBlocker(props: RoomProps, player: Player, opening: number) {
   const { state, me, busy, connected } = props;
-  const entries = state.roster.filter(entry => entry.managerId === me.id);
-  const maximum = maxBid(me.budget, player, entries, state.players);
-  if (busy || !connected || state.draft.status !== 'running') return 'Draft is not ready for this action';
-  if (state.draft.phase !== 'nomination' || state.draft.nominatorId !== me.id) {
-    return 'Wait for your nomination turn';
-  }
-  if (maximum < 1) return 'No legal placement or budget';
-  if (!Number.isInteger(opening) || opening < 1 || opening > maximum) {
-    return `Opening bid must be $1–$${maximum}`;
-  }
+  if (busy || !connected) return 'Waiting for the server';
+  const maximum = maxBid(me.budget, player, entriesOf(state, me.id), state.players);
+  if (maximum < 1) return 'No open spot fits this player';
+  if (opening > maximum) return `Your max for this player is ${dollars(maximum)}`;
   return '';
 }
-export function PoolPanel(props: RoomProps) {
-  const { state, send } = props;
+function myNominationTurn(state: AuctionState, me: Manager) {
+  const d = state.draft;
+  return d.status === 'running' && d.phase === 'nomination' && d.nominatorId === me.id;
+}
+
+export function PoolPanel(props: RoomProps & { opening: number }) {
+  const { state, me, send, opening } = props;
   const [search, setSearch] = useState('');
   const [position, setPosition] = useState('');
   const [sort, setSort] = useState('projection');
-  const [opening, setOpening] = useState(1);
-  const [limit, setLimit] = useState(100);
+  const [limit, setLimit] = useState(150);
+  const [open, setOpen] = useState<string | null>(null);
   const sold = new Set(state.roster.map(entry => entry.playerId));
-  const pool = state.players.filter(player => {
-    const matchesName = player.name.toLowerCase().includes(search.toLowerCase());
-    const matchesPosition = !position || player.positions.includes(position as Player['positions'][number]);
-    return !sold.has(player.id) && matchesName && matchesPosition;
-  });
+  const query = search.trim().toLowerCase();
+  const pool = state.players.filter(player => !sold.has(player.id)
+    && (!query || player.name.toLowerCase().includes(query) || (player.team ?? '').toLowerCase() === query)
+    && (!position || (position === 'TAXI' ? taxiEligibility(player) === 'eligible'
+      : position === 'OUT' ? player.injuryStatus === 'Out'
+        : player.positions.includes(position as Player['positions'][number]))));
   pool.sort((a, b) => {
-    if (sort === 'name') return a.name.localeCompare(b.name);
-    if (sort === 'adp') return (a.adp ?? Infinity) - (b.adp ?? Infinity);
+    if (sort === 'age') return (a.age ?? Infinity) - (b.age ?? Infinity);
+    if (sort === 'adp') return (a.adp || Infinity) - (b.adp || Infinity);
     return (b.projection ?? -Infinity) - (a.projection ?? -Infinity);
   });
+  const nominating = myNominationTurn(state, me);
+  const lotPlayer = state.lot?.playerId;
   return (
-    <section className="panel pool">
-      <div className="panel-heading"><h2>Player pool</h2><span>{pool.length} available</span></div>
-      <div className="filters">
-        <input aria-label="Search players" placeholder="Search players" value={search}
-          onChange={event => { setSearch(event.target.value); setLimit(100); }} />
-        <div>
-          <select aria-label="Position filter" value={position} onChange={event => setPosition(event.target.value)}>
-            <option value="">All positions</option>
-            {['PG', 'SG', 'SF', 'PF', 'C'].map(p => <option key={p}>{p}</option>)}
-          </select>
-          <select aria-label="Sort players" value={sort} onChange={event => setSort(event.target.value)}>
-            <option value="projection">Projection ↓</option><option value="adp">Dynasty ADP ↑</option>
-            <option value="name">Name A–Z</option>
-          </select>
+    <section className="panel pool" aria-label="Players">
+      <div className="pool-filters">
+        <input type="search" aria-label="Search players or team" placeholder="Search name or team"
+          value={search} onChange={event => { setSearch(event.target.value); setLimit(150); }} />
+        <div className="segmented" role="group" aria-label="Filter players">
+          {['', 'PG', 'SG', 'SF', 'PF', 'C', 'TAXI', 'OUT'].map(value => (
+            <button key={value || 'all'} aria-pressed={position === value} onClick={() => setPosition(value)}>
+              {value === '' ? 'All' : value === 'TAXI' ? 'Taxi' : value === 'OUT' ? 'Out' : value}
+            </button>
+          ))}
         </div>
-        <label>Opening bid
-          <input aria-label="Opening bid" type="number" min="1" step="1" value={opening}
-            onChange={event => setOpening(Number(event.target.value))} />
-        </label>
       </div>
-      <div className="scroll">
+      <div className={`scroll ${nominating ? 'nominating' : ''}`}>
+        <div className="table-head pool-grid">
+          <span>Player</span><span>Pos</span>
+          <button className={sort === 'age' ? 'sorted' : ''} onClick={() => setSort('age')}>Age</button>
+          <span title="Career NBA regular-season games">GP</span>
+          <button className={sort === 'projection' ? 'sorted' : ''} onClick={() => setSort('projection')}
+            title="Projected fantasy points per game">Proj</button>
+          <button className={sort === 'adp' ? 'sorted' : ''} onClick={() => setSort('adp')}
+            title="Sleeper dynasty ADP">ADP</button>
+          {nominating && <span />}
+        </div>
         {pool.slice(0, limit).map(player => {
-          const reason = nominationReason(props, player, opening);
+          const blocker = nominating ? nominationBlocker(props, player, opening) : '';
+          const expanded = open === player.id;
           return (
-            <div className="player-row" key={player.id}>
-              <div className="player-info">
-                <strong>{player.name}</strong><PlayerInfo player={player} /><PlayerDetails player={player} />
+            <Fragment key={player.id}>
+              <div className={`pool-row pool-grid ${expanded ? 'expanded' : ''} ${lotPlayer === player.id ? 'on-block' : ''}`}
+                onClick={() => setOpen(expanded ? null : player.id)}>
+                <span className="name">
+                  <button className="name-button" aria-expanded={expanded} title={player.name}
+                    onClick={event => { event.stopPropagation(); setOpen(expanded ? null : player.id); }}>
+                    {player.name}
+                  </button>
+                  <small>{player.team ?? 'No team'}</small>
+                  <InjuryTag status={player.injuryStatus} />
+                  <EligibilityTags player={player} />
+                </span>
+                <span>{positionsLabel(player)}</span>
+                <Cell value={ageLabel(player)} unknown={player.age === null ? 'Age unknown' : null} />
+                <Cell value={careerLabel(player)} unknown={player.careerGames === null ? 'Career games unknown' : null} />
+                <Cell value={projectionLabel(player)} className="strong"
+                  unknown={player.projection === null ? 'No Sleeper projection' : null} />
+                <Cell value={player.adp ? player.adp.toFixed(1) : ''} className="muted"
+                  unknown={player.adp ? null : 'No dynasty ADP'} />
+                {nominating && (
+                  <span>
+                    <button className="nominate" disabled={!!blocker} title={blocker || `Nominate at ${dollars(opening)}`}
+                      onClick={event => {
+                        event.stopPropagation();
+                        void send({ type: 'nominate', playerId: player.id, amount: opening });
+                      }}>
+                      Nominate
+                    </button>
+                  </span>
+                )}
               </div>
-              <button title={reason || `Nominate ${player.name}`} disabled={!!reason}
-                onClick={() => void send({ type: 'nominate', playerId: player.id, amount: opening })}>
-                Nominate
-              </button>
-            </div>
+              {expanded && <PlayerDetails player={player} />}
+            </Fragment>
           );
         })}
-        {pool.length > limit && <button onClick={() => setLimit(limit + 100)}>Show 100 more players</button>}
+        {pool.length === 0 && <p className="empty-note">No available players match.</p>}
+        {pool.length > limit && (
+          <button className="more" onClick={() => setLimit(limit + 150)}>Show more ({pool.length - limit} left)</button>
+        )}
       </div>
     </section>
   );
 }
-function bidReason(props: RoomProps, player: Player | undefined, highBid: number, passed: boolean) {
+
+function bidBlocker(props: RoomProps, maximum: number, passed: boolean) {
   const { state, me, busy, connected } = props;
+  const lot = state.lot;
+  if (!lot) return 'No player on the block';
   if (state.draft.status === 'paused') return 'Draft paused';
-  if (busy || !connected || state.draft.status !== 'running') return 'Draft is not ready for this action';
-  if (passed) return 'You gave up on this lot';
-  const entries = state.roster.filter(entry => entry.managerId === me.id);
-  if (!player || maxBid(me.budget, player, entries, state.players) <= highBid) return 'No legal higher bid';
+  if (state.draft.status !== 'running') return 'Draft is not live';
+  if (!connected) return 'Reconnecting';
+  if (busy) return 'Sending';
+  if (lot.highBidderId === me.id) return 'You have the high bid';
+  if (passed) return 'You gave up on this player';
+  if (maximum <= lot.highBid) return maximum < 1 ? 'No open spot fits this player' : `Your max is ${dollars(maximum)}`;
   return '';
 }
-function CommissionerControls({ state, me, busy, send }: RoomProps) {
-  if (!me.commissioner) return null;
-  const d = state.draft;
+
+function BidControls(props: RoomProps & { player: Player }) {
+  const { state, me, send, player } = props;
+  const lot = state.lot!;
+  const [custom, setCustom] = useState('');
+  const maximum = maxBid(me.budget, player, entriesOf(state, me.id), state.players);
+  const passed = state.passes.includes(me.id);
+  const blocker = bidBlocker(props, maximum, passed);
+  const customAmount = Number(custom);
+  const customValid = Number.isInteger(customAmount) && customAmount > lot.highBid && customAmount <= maximum;
+  const bid = (amount: number) => void send({ type: 'bid', lotId: lot.id, amount });
+  const canGiveUp = !passed && lot.highBidderId !== me.id && state.draft.status === 'running' && !props.busy;
   return (
-    <div className="commissioner">
-      <strong>Commissioner</strong>
-      <div>
-        {d.status === 'setup' ? (
-          <button disabled={busy} onClick={() => void send({ type: 'start' })}>Start draft</button>
-        ) : (
-          <>
-            <button disabled={busy || d.status === 'complete'}
-              onClick={() => void send({ type: d.status === 'paused' ? 'resume' : 'pause' })}>
-              {d.status === 'paused' ? 'Resume' : 'Pause'}
-            </button>
-            <button disabled={busy || !state.sales.length} onClick={() => void send({ type: 'undo' })}>
-              Undo last sale
-            </button>
-            <button disabled={busy || !state.lot}
-              onClick={() => state.lot && void send({ type: 'force', lotId: state.lot.id })}>
-              Force end
-            </button>
-          </>
-        )}
+    <div className="bid-controls">
+      <div className="bid-buttons">
+        {[1, 5].map(step => (
+          <button key={step} className="primary" disabled={!!blocker || lot.highBid + step > maximum}
+            title={blocker} onClick={() => bid(lot.highBid + step)}>
+            <span className="step">+{step}</span><span>{dollars(lot.highBid + step)}</span>
+          </button>
+        ))}
+        <form className="custom" onSubmit={event => { event.preventDefault(); if (customValid) { bid(customAmount); setCustom(''); } }}>
+          <input aria-label="Bid amount" inputMode="numeric" placeholder="Amount"
+            value={custom} onChange={event => setCustom(event.target.value.replace(/\D/g, ''))} disabled={!!blocker} />
+          <button className="primary" disabled={!!blocker || !customValid}>Bid</button>
+        </form>
+      </div>
+      <div className="bid-footer">
+        <button className="ghost small" disabled={!canGiveUp} onClick={() => void send({ type: 'pass', lotId: lot.id })}>
+          {passed ? 'Gave up' : 'Give up'}
+        </button>
+        <p className={`bid-note ${lot.highBidderId === me.id ? 'leading' : ''}`}>
+          {lot.highBidderId === me.id ? 'You have the high bid.' : blocker || (
+            <>
+              You can bid up to {dollars(maximum)}.{' '}
+              <button className="link" onClick={() => setCustom(String(maximum))}>Use max</button>
+            </>
+          )}
+        </p>
       </div>
     </div>
   );
 }
-function nominationText(state: AuctionState, me: Manager) {
-  const d = state.draft;
-  if (d.status === 'complete') {
-    return d.completionReason === 'full-cycle-passed'
-      ? 'Draft complete: every eligible manager passes a full cycle without a nomination.'
-      : 'Draft complete: no manager has a remaining nomination.';
-  }
-  if (d.status === 'setup') return 'The commissioner starts the draft.';
-  const entries = state.roster.filter(entry => entry.managerId === d.nominatorId);
-  if (counts(entries).active === 20) return 'Taxi/IR nomination. Timeout passes this turn and keeps future turns open.';
-  return d.nominatorId === me.id ? 'Choose a player and click Nominate.' : 'Timeout nominates the top legal player.';
-}
-export function AuctionPanel(props: RoomProps & { offset: number }) {
-  const { state, me, send, busy, offset } = props;
-  const [custom, setCustom] = useState(1);
-  const { draft: d, lot } = state;
-  const player = state.players.find(p => p.id === lot?.playerId);
-  const entries = state.roster.filter(entry => entry.managerId === me.id);
-  const myCounts = counts(entries);
-  const maximum = player ? maxBid(me.budget, player, entries, state.players) : 0;
-  const passed = state.passes.includes(me.id);
-  const reason = bidReason(props, player, lot?.highBid || 0, passed);
-  const nominator = state.managers.find(manager => manager.id === d.nominatorId);
-  const highBidder = state.managers.find(manager => manager.id === lot?.highBidderId);
-  const canPass = d.status === 'running' && !busy && !passed && me.id !== lot?.highBidderId;
+
+function OpeningBid({ opening, setOpening, cap }: { opening: number; setOpening: (value: number) => void; cap: number }) {
+  const [text, setText] = useState<string | null>(null);
   return (
-    <section className="panel auction">
-      <div className="panel-heading">
-        <h2>{d.phase === 'bidding' ? 'On the block' : 'Nomination'}</h2><span>{nominator?.name || 'Waiting'}</span>
+    <div className="opening">
+      <span>Open at</span>
+      <button className="secondary" aria-label="Lower opening bid" disabled={opening <= 1}
+        onClick={() => setOpening(Math.max(1, opening - 1))}>−</button>
+      <input aria-label="Opening bid" inputMode="numeric" value={text ?? String(opening)}
+        onFocus={event => { setText(String(opening)); event.target.select(); }}
+        onBlur={() => setText(null)}
+        onChange={event => {
+          const digits = event.target.value.replace(/\D/g, '');
+          setText(digits);
+          if (digits) setOpening(Math.max(1, Math.min(cap, Number(digits))));
+        }} />
+      <button className="secondary" aria-label="Raise opening bid" disabled={opening >= cap}
+        onClick={() => setOpening(Math.min(cap, opening + 1))}>+</button>
+    </div>
+  );
+}
+
+function NominationView(props: RoomProps & { opening: number; setOpening: (value: number) => void }) {
+  const { state, me, busy, send, opening, setOpening } = props;
+  const d = state.draft;
+  const myEntries = entriesOf(state, me.id);
+  if (d.status === 'setup') {
+    return (
+      <div className="nomination">
+        <h2>{me.commissioner ? `${state.managers.filter(m => m.claimed).length} of ${state.managers.length} managers joined`
+          : `Waiting for ${nameOf(state, state.managers.find(m => m.commissioner)?.id)} to start`}</h2>
+        {!me.commissioner && <p>{state.managers.filter(m => m.claimed).length} of {state.managers.length} managers joined.</p>}
+        {me.commissioner && (
+          <button className="primary large" disabled={busy} onClick={() => void send({ type: 'start' })}>Start draft</button>
+        )}
       </div>
-      <Countdown draft={d} offset={offset} />
-      {lot && player ? (
+    );
+  }
+  if (d.status === 'complete') {
+    return (
+      <div className="nomination">
+        <h2>Draft complete</h2>
+        <p>{d.completionReason === 'full-cycle-passed'
+          ? 'Every manager who could still nominate passed a full round.' : 'No manager can add another player.'}</p>
+      </div>
+    );
+  }
+  const mine = d.nominatorId === me.id;
+  const cap = Math.max(1, me.budget - Math.max(0, 19 - counts(myEntries).active));
+  return (
+    <div className="nomination">
+      <h2>{mine ? 'Your nomination' : `${nameOf(state, d.nominatorId)} is nominating`}</h2>
+      {mine ? (
         <>
-          <h2 className="player-name">{player.name}</h2>
-          <PlayerInfo player={player} /><PlayerDetails player={player} />
-          <div className="high-bid"><strong>{dollars(lot.highBid)}</strong><span>{highBidder?.name} leads</span></div>
-          <div className="bid-buttons">
-            {[1, 5].map(increment => (
-              <button key={increment} disabled={!!reason || maximum < lot.highBid + increment} title={reason}
-                onClick={() => void send({ type: 'bid', lotId: lot.id, amount: lot.highBid + increment })}>
-                + ${increment}
-              </button>
-            ))}
-            <button disabled={!!reason} title={reason}
-              onClick={() => void send({ type: 'bid', lotId: lot.id, amount: maximum })}>Max {dollars(maximum)}</button>
-          </div>
-          <div className="custom-bid">
-            <input aria-label="Custom bid" type="number" min={lot.highBid + 1} max={maximum} step="1"
-              value={custom} onChange={event => setCustom(Number(event.target.value))} />
-            <button disabled={!!reason || !Number.isInteger(custom) || custom <= lot.highBid || custom > maximum}
-              onClick={() => void send({ type: 'bid', lotId: lot.id, amount: custom })}>Bid</button>
-            <button className="quiet" disabled={!canPass}
-              title={passed ? 'No re-entry after giving up' : 'The high bidder cannot give up'}
-              onClick={() => void send({ type: 'pass', lotId: lot.id })}>{passed ? 'Given up' : 'Give up'}</button>
-          </div>
-          <small className="reason">{reason || `Your legal maximum is ${dollars(maximum)}`}</small>
+          {d.status !== 'paused' && <p>{timeoutText(state, me)}</p>}
+          <OpeningBid opening={opening} setOpening={setOpening} cap={cap} />
         </>
-      ) : (
-        <div className="nomination-copy">
-          <h2>{d.status === 'complete' ? 'Draft complete' : `${nominator?.name || 'Next manager'} nominates`}</h2>
-          <p>{nominationText(state, me)}</p>
+      ) : d.status !== 'paused' && (
+        <p>{timeoutText(state, state.managers.find(manager => manager.id === d.nominatorId))}</p>
+      )}
+    </div>
+  );
+}
+
+const placementPlaces: Record<Placement, string> = { active: 'your active roster', taxi: 'taxi', ir: 'IR' };
+function LastWin(props: RoomProps) {
+  const { state, me, send, busy } = props;
+  const [dismissed, setDismissed] = useState<number | null>(null);
+  const sale = state.sales.find(candidate => candidate.highBidderId === me.id);
+  const newer = sale && ((state.lot?.id ?? 0) > sale.id || (state.sales[0]?.id ?? 0) > sale.id);
+  const entry = sale && sale.id !== dismissed && !newer
+    ? state.roster.find(candidate => candidate.lotId === sale.id) : undefined;
+  if (!entry || state.draft.status === 'complete') return null;
+  const player = findPlayer(state, entry.playerId);
+  const moves = (['active', 'taxi', 'ir'] as Placement[])
+    .filter(placement => placement !== entry.placement && !moveBlocker(props, entry, placement));
+  if (!player || !moves.length) return null;
+  return (
+    <div className="last-win">
+      <span>You won <strong>{player.name}</strong> for {dollars(entry.price)}, placed on {placementPlaces[entry.placement]}.</span>
+      <div className="placement" role="group" aria-label={`Placement for ${player.name}`}>
+        <button disabled={busy} onClick={() => setDismissed(entry.lotId)}>Keep</button>
+        {moves.map(placement => (
+          <button key={placement} disabled={busy} onClick={() => {
+            setDismissed(entry.lotId);
+            void send({ type: 'place', playerId: entry.playerId, placement });
+          }}>
+            To {placementLabels[placement]}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function BlockPanel(props: RoomProps & { offset: number; opening: number; setOpening: (value: number) => void }) {
+  const { state, offset } = props;
+  const [detailsFor, setDetailsFor] = useState<number | null>(null);
+  const lot = state.lot;
+  const showDetails = lot !== null && detailsFor === lot.id;
+  const player = findPlayer(state, lot?.playerId);
+  return (
+    <section className={`panel block ${lot ? 'bidding' : ''}`} aria-label="Current player">
+      <div className="block-top">
+        <div className="block-main">
+          {lot && player ? (
+            <>
+              <div className="lot-heading">
+                <h2 title={player.name}>{player.name}</h2>
+                <button className="link" aria-expanded={showDetails}
+                  onClick={() => setDetailsFor(showDetails || !lot ? null : lot.id)}>
+                  {showDetails ? 'Hide details' : 'Details'}
+                </button>
+              </div>
+              <PlayerLine player={player} />
+              <div className="high-bid">
+                <strong>{dollars(lot.highBid)}</strong>
+                <span>{lot.highBidderId === props.me.id ? 'You lead' : `${nameOf(state, lot.highBidderId)} leads`}</span>
+                <small>Nominated by {nameOf(state, lot.nominatorId)}</small>
+              </div>
+            </>
+          ) : <NominationView {...props} />}
         </div>
-      )}
-      {(me.done || myCounts.active === 20 && (myCounts.taxi < 3 || myCounts.ir < 2))
-        && d.status === 'running' && (
-        <button className="quiet" disabled={busy} onClick={() => void send({ type: 'done', done: !me.done })}>
-          {me.done ? 'Resume my nominations' : 'Done nominating — keep bidding'}
-        </button>
-      )}
-      <CommissionerControls {...props} />
+        <ShotClock draft={state.draft} offset={offset} />
+      </div>
+      {lot && player && <BidControls {...props} player={player} />}
+      {lot && player && showDetails && <PlayerDetails player={player} />}
+      <LastWin {...props} />
     </section>
   );
 }
+
+function teamStatus(state: AuctionState, manager: Manager, maximum: number, next: number | null) {
+  const lot = state.lot;
+  if (lot?.highBidderId === manager.id) return { text: `Leads ${dollars(lot.highBid)}`, tone: 'lead' };
+  if (lot && state.passes.includes(manager.id)) return { text: 'Gave up', tone: 'muted' };
+  if (lot && maximum <= lot.highBid) return { text: 'Can’t raise', tone: 'muted' };
+  if (!lot && state.draft.nominatorId === manager.id && state.draft.status !== 'complete') {
+    return { text: 'Nominating', tone: 'turn' };
+  }
+  if (manager.done) return { text: 'Skipping noms', tone: 'muted' };
+  if (manager.id === next && state.draft.status !== 'complete') return { text: 'Up next', tone: 'muted' };
+  if (!manager.claimed && state.draft.status !== 'complete') return { text: 'Not joined', tone: 'muted' };
+  return { text: '', tone: '' };
+}
+
 export function TeamsPanel({ state, me, busy, send }: RoomProps) {
-  const current = state.players.find(player => player.id === state.lot?.playerId);
+  const current = findPlayer(state, state.lot?.playerId);
+  const seatsEditable = me.commissioner && (state.draft.status === 'setup' || state.draft.status === 'paused');
+  const next = state.draft.status === 'setup' ? null : nextNominator(state);
   return (
-    <section className="panel teams">
-      <div className="panel-heading"><h2>Teams</h2><span>Budget · Max · Open A/T/IR</span></div>
+    <section className="panel teams" aria-label="Teams">
       <div className="scroll">
+        <div className={`table-head team-grid ${seatsEditable ? 'with-admin' : ''}`}>
+          <span>Team</span><span>Left</span><span title={current ? `Max bid on ${current.name}` : 'Max bid'}>Max</span>
+          <span>Active</span><span>Taxi</span><span>IR</span>{seatsEditable && <span />}
+        </div>
         {state.managers.map(manager => {
-          const entries = state.roster.filter(entry => entry.managerId === manager.id);
+          const entries = entriesOf(state, manager.id);
           const c = counts(entries);
           const maximum = current ? maxBid(manager.budget, current, entries, state.players)
             : Math.max(0, manager.budget - Math.max(0, 19 - c.active));
-          let label = manager.claimed ? 'Seat claimed' : 'Seat open';
-          if (manager.done) label = 'Done nominating';
-          if (manager.id === state.draft.nominatorId) label = 'Nominating now';
-          if (current && maximum <= (state.lot?.highBid || 0)) label = 'Cannot raise';
-          if (state.passes.includes(manager.id)) label = 'Given up';
-          if (manager.id === state.lot?.highBidderId) label = 'High bidder';
+          const status = teamStatus(state, manager, maximum, next);
+          const turn = !state.lot && state.draft.nominatorId === manager.id && state.draft.status !== 'complete';
           return (
-            <div className={`team-row ${manager.id === state.draft.nominatorId ? 'nominating' : ''}`} key={manager.id}>
-              <div><strong>{manager.name}</strong><small>{label}</small></div>
-              <span>{dollars(manager.budget)}<small>max {dollars(maximum)}</small></span>
-              <span>{20 - c.active}/{3 - c.taxi}/{2 - c.ir}</span>
-              {me.commissioner && manager.claimed && (
-                <button title={`Release ${manager.name}'s seat`} disabled={busy}
-                  onClick={() => void send({ type: 'release', managerId: manager.id })}>Release</button>
+            <div key={manager.id}
+              className={`team-row team-grid ${seatsEditable ? 'with-admin' : ''} ${manager.id === me.id ? 'me' : ''} ${turn ? 'turn' : ''}`}>
+              <span className="team-name">
+                <b>{manager.name}</b>
+                {status.text && <span className={`status ${status.tone}`}>{status.text}</span>}
+              </span>
+              <span className="num">{dollars(manager.budget)}</span>
+              <span className="num">{dollars(maximum)}</span>
+              <span className={`num ${c.active === 20 ? 'full' : ''}`}>{c.active}/20</span>
+              <span className={`num ${c.taxi === 3 ? 'full' : ''}`}>{c.taxi}/3</span>
+              <span className={`num ${c.ir === 2 ? 'full' : ''}`}>{c.ir}/2</span>
+              {seatsEditable && (
+                <span>
+                  {manager.claimed && manager.id !== me.id && seatsEditable && (
+                    <ConfirmButton className="release ghost small" label="Release" confirmLabel={`Release ${manager.name}?`}
+                      disabled={busy}
+                      title={`Release ${manager.name}'s seat so they can rejoin on another device`}
+                      onConfirm={() => void send({ type: 'release', managerId: manager.id })} />
+                  )}
+                </span>
               )}
             </div>
           );
@@ -303,97 +535,215 @@ export function TeamsPanel({ state, me, busy, send }: RoomProps) {
     </section>
   );
 }
-function moveAllowed(props: RoomProps, entry: Entry, placement: Placement) {
+
+function moveBlocker(props: RoomProps, entry: Entry, placement: Placement) {
   const { state, me } = props;
-  const player = state.players.find(p => p.id === entry.playerId)!;
+  const player = findPlayer(state, entry.playerId)!;
   const rest = state.roster.filter(e => e.managerId === me.id && e.playerId !== entry.playerId);
-  if (!legalPlacements(player, rest, state.players).includes(placement)) return false;
-  const changed = [...rest, { ...entry, placement }];
-  if (me.budget < 20 - counts(changed).active) return false;
-  if (state.lot?.highBidderId === me.id) {
-    const standing = state.players.find(p => p.id === state.lot!.playerId)!;
-    if (maxBid(me.budget, standing, changed, state.players) < state.lot.highBid) return false;
+  if (!legalPlacements(player, rest, state.players).includes(placement)) {
+    if (placement === 'taxi') return taxiEligibility(player) === 'eligible' ? 'Taxi is full' : 'Not taxi eligible';
+    if (placement === 'ir') return player.injuryStatus === 'Out' ? 'IR is full' : 'Only players listed Out';
+    return 'No active spot fits him';
   }
-  return true;
+  const changed = [...rest, { ...entry, placement }];
+  if (me.budget < 20 - counts(changed).active) return 'Keep $1 for each open active spot';
+  if (state.lot?.highBidderId === me.id) {
+    const standing = findPlayer(state, state.lot.playerId)!;
+    if (maxBid(me.budget, standing, changed, state.players) < state.lot.highBid) return 'Would break your high bid';
+  }
+  return '';
 }
-function RosterRow(props: RoomProps & { entry: Entry; slot?: string }) {
-  const { state, entry, slot, busy, send } = props;
-  const player = state.players.find(p => p.id === entry.playerId)!;
+
+function PlacementSwitch(props: RoomProps & { entry: Entry }) {
+  const { entry, busy, send, state } = props;
+  if (state.draft.status === 'complete') return null;
+  const moves = (['active', 'taxi', 'ir'] as Placement[])
+    .filter(placement => placement !== entry.placement && !moveBlocker(props, entry, placement));
+  if (!moves.length) return null;
   return (
-    <div className="roster-row">
-      <div><small>{slot || entry.placement} · {dollars(entry.price)}</small>
-        <strong>{player.name}</strong><Badges player={player} />
-      </div>
-      <select aria-label={`Placement for ${player.name}`} value={entry.placement}
-        disabled={busy || state.draft.status === 'complete'}
-        onChange={event => void send({ type: 'place', playerId: player.id, placement: event.target.value as Placement })}>
-        {(['active', 'taxi', 'ir'] as Placement[]).map(placement => (
-          <option key={placement} value={placement} disabled={!moveAllowed(props, entry, placement)}>
-            {placement === 'ir' ? 'IR' : placement === 'taxi' ? 'Taxi' : 'Active'}
-          </option>
-        ))}
-      </select>
+    <div className="placement" role="group" aria-label={`Move ${findPlayer(state, entry.playerId)?.name}`}>
+      {moves.map(placement => (
+        <button key={placement} disabled={busy}
+          onClick={() => void send({ type: 'place', playerId: entry.playerId, placement })}>
+          To {placementLabels[placement]}
+        </button>
+      ))}
     </div>
   );
 }
+
+function RosterRow(props: RoomProps & { entry: Entry; slot: string }) {
+  const { state, entry, slot } = props;
+  const player = findPlayer(state, entry.playerId)!;
+  return (
+    <div className="roster-row">
+      <span className="slot">{slot}</span>
+      <span className="roster-name">
+        <strong title={player.name}>{player.name}</strong>
+        <small>{positionsLabel(player)} · {dollars(entry.price)}</small>
+        <InjuryTag status={player.injuryStatus} />
+        <EligibilityTags player={player} />
+      </span>
+      <PlacementSwitch {...props} />
+    </div>
+  );
+}
+function OpenSlot({ slot }: { slot: string }) {
+  return <div className="roster-row open"><span className="slot">{slot}</span><span className="muted">Open</span></div>;
+}
+
 export function RosterPanel(props: RoomProps) {
   const { state, me } = props;
-  const entries = state.roster.filter(entry => entry.managerId === me.id);
+  const entries = entriesOf(state, me.id);
   const active = entries.filter(entry => entry.placement === 'active');
+  const taxi = entries.filter(entry => entry.placement === 'taxi');
+  const ir = entries.filter(entry => entry.placement === 'ir');
   const c = counts(entries);
-  const assignment = matching(active.map(entry => state.players.find(p => p.id === entry.playerId)!)) || [];
-  const starterSlots = assignment.length ? assignment.slice(0, 10) : Array<number>(10).fill(-1);
+  const activePlayers = active.map(entry => findPlayer(state, entry.playerId)!);
+  const assignment = matching(activePlayers) ?? Array<number>(slots.length).fill(-1);
   const bench = assignment.slice(10).filter(index => index >= 0);
   return (
-    <section className="panel roster">
-      <div className="panel-heading"><h2>My roster</h2><span>{c.active}/20 · {dollars(me.budget)}</span></div>
+    <section className="panel roster" aria-label="My roster">
+      <div className="panel-head">
+        <h2>My roster</h2>
+        <span className="narrow-only">
+          {dollars(me.budget)} left · max {dollars(Math.max(0, me.budget - Math.max(0, 19 - c.active)))} · {c.active}/20 active
+        </span>
+      </div>
       <div className="scroll">
         <h3>Starters</h3>
-        {starterSlots.map((index, slot) => index >= 0 ? (
-          <RosterRow {...props} key={active[index].playerId} entry={active[index]} slot={slots[slot]} />
-        ) : <div className="empty-slot" key={slot}>{slots[slot]}<span>Open</span></div>)}
-        <h3>Bench · {bench.length}/10</h3>
-        {bench.map(index => <RosterRow {...props} key={active[index].playerId} entry={active[index]} slot="BENCH" />)}
-        <h3>Taxi · {c.taxi}/3</h3>
-        {entries.filter(e => e.placement === 'taxi').map(entry => (
-          <RosterRow {...props} key={entry.playerId} entry={entry} />
-        ))}
-        <h3>IR · {c.ir}/2</h3>
-        {entries.filter(e => e.placement === 'ir').map(entry => <RosterRow {...props} key={entry.playerId} entry={entry} />)}
-      </div>
-    </section>
-  );
-}
-function eventLabel(event: RecentEvent, state: AuctionState) {
-  const name = state.managers.find(manager => manager.id === event.managerId)?.name || 'Commissioner';
-  if (event.type === 'nomination-pass') return `${name} passes the nomination turn on timeout`;
-  if (event.type === 'done') return `${name} ${event.data.done ? 'stops' : 'resumes'} nominations`;
-  if (event.type === 'complete') return event.data.reason === 'full-cycle-passed'
-    ? 'Draft ends: a full cycle passes without a nomination' : 'Draft ends: no eligible nominations remain';
-  if (event.type === 'sale') return `${name} wins for $${event.data.price} (${event.data.reason})`;
-  if (event.type === 'bid') return `${name} bids $${event.data.amount}`;
-  if (event.type === 'pass') return `${name} gives up on the lot`;
-  if (event.type === 'nomination') return `${name} nominates${event.data.auto ? ' on timeout' : ''}`;
-  if (event.type === 'undo') return 'Commissioner undoes the last sale and pauses';
-  if (event.type === 'placement') return `${name} moves a player to ${event.data.to}`;
-  return `${name}: ${event.type}`;
-}
-export function HistoryPanel({ state }: RoomProps) {
-  return (
-    <section className="panel sales">
-      <div className="panel-heading"><h2>Sales and events</h2><span>{state.roster.length} drafted</span></div>
-      <div className="scroll">
-        {state.sales.map(sale => (
-          <div className="sale-row" key={`sale-${sale.id}`}>
-            <strong>{state.players.find(player => player.id === sale.playerId)?.name}</strong>
-            <span>{state.managers.find(manager => manager.id === sale.highBidderId)?.name}</span>
-            <b>{dollars(sale.highBid)}</b>
+        {assignment.slice(0, 10).map((index, slot) => index >= 0
+          ? <RosterRow {...props} key={active[index].playerId} entry={active[index]} slot={slots[slot]} />
+          : <OpenSlot key={`slot-${slot}`} slot={slots[slot]} />)}
+        <h3>Bench <span>{bench.length}/10</span></h3>
+        {bench.map(index => <RosterRow {...props} key={active[index].playerId} entry={active[index]} slot="BN" />)}
+        {(me.done || (onlyReserveOpen(entries) && me.budget >= 1)) && state.draft.status !== 'complete'
+          && state.draft.status !== 'setup' && (
+          <div className="skip-note">
+            <p>{me.done ? 'You are skipping your nominations.' : 'Only taxi and IR spots are left.'} You can still bid.</p>
+            <button className="ghost small" disabled={props.busy}
+              onClick={() => void props.send({ type: 'done', done: !me.done })}>
+              {me.done ? 'Nominate again' : 'Skip my nominations'}
+            </button>
           </div>
-        ))}
-        {state.recentEvents.filter(event => !['claim', 'turn'].includes(event.type)).map(event => (
-          <div className="event-row" key={event.id}>{eventLabel(event, state)}</div>
-        ))}
+        )}
+        <h3 title="Rookies or players under 65 career games">Taxi <span>{c.taxi}/3</span></h3>
+        {taxi.map(entry => <RosterRow {...props} key={entry.playerId} entry={entry} slot="TX" />)}
+        <h3 title="Only players listed Out">IR <span>{c.ir}/2</span></h3>
+        {ir.map(entry => <RosterRow {...props} key={entry.playerId} entry={entry} slot="IR" />)}
       </div>
     </section>
   );
+}
+
+function eventText(event: RecentEvent, state: AuctionState) {
+  const name = nameOf(state, event.managerId);
+  const player = findPlayer(state, String(event.data.playerId ?? ''))?.name;
+  switch (event.type) {
+    case 'nomination': return `${name} nominated ${player ?? 'a player'}${event.data.auto ? ' (time ran out)' : ''}`;
+    case 'nomination-pass': return `${name} passed (time ran out)`;
+    case 'bid': return `${name} bid ${dollars(Number(event.data.amount))}`;
+    case 'pass': return `${name} gave up`;
+    case 'sale': return `${name} won ${player ?? 'a player'} for ${dollars(Number(event.data.price))}`;
+    case 'placement': return `${name} moved ${player ?? 'a player'} to ${placementLabels[event.data.to as Placement] ?? event.data.to}`;
+    case 'done': return `${name} ${event.data.done ? 'is skipping nominations' : 'resumed nominations'}`;
+    case 'undo': return 'Commissioner undid the last sale';
+    case 'pause': return 'Commissioner paused the draft';
+    case 'resume': return 'Commissioner resumed the draft';
+    case 'force': return 'Commissioner ended bidding';
+    case 'start': return 'Draft started';
+    case 'release': return 'Commissioner released a seat';
+    case 'complete': return 'Draft complete';
+    default: return null;
+  }
+}
+
+export function ResultsPanel({ state }: RoomProps) {
+  const [view, setView] = useState<'sales' | 'activity'>('sales');
+  const sales = [...state.roster].sort((a, b) => b.lotId - a.lotId);
+  const activity = state.recentEvents
+    .map(event => ({ event, text: eventText(event, state) }))
+    .filter((item): item is { event: RecentEvent; text: string } => item.text !== null);
+  return (
+    <section className="panel results" aria-label="Results">
+      <div className="panel-head">
+        <div className="segmented tabs" role="tablist">
+          <button role="tab" aria-selected={view === 'sales'} onClick={() => setView('sales')}>
+            Sales · {sales.length}
+          </button>
+          <button role="tab" aria-selected={view === 'activity'} onClick={() => setView('activity')}>Activity</button>
+        </div>
+      </div>
+      <div className="scroll">
+        {view === 'sales' ? sales.map(entry => (
+          <div className="result-row" key={entry.lotId}>
+            <strong>{findPlayer(state, entry.playerId)?.name}</strong>
+            <span>{nameOf(state, entry.managerId)}</span>
+            <b>{dollars(entry.price)}</b>
+          </div>
+        )) : activity.map(({ event, text }) => (
+          <div className="activity-row" key={event.id}>{text}</div>
+        ))}
+        {view === 'sales' && sales.length === 0 && <p className="empty-note">No players sold yet.</p>}
+      </div>
+    </section>
+  );
+}
+
+function ConfirmButton({ label, confirmLabel, disabled, className, onConfirm, title }: {
+  label: string; confirmLabel: string; disabled: boolean; className: string; onConfirm: () => void; title?: string;
+}) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const timer = setTimeout(() => setArmed(false), 4000);
+    return () => clearTimeout(timer);
+  }, [armed]);
+  return (
+    <button className={`${className} ${armed ? 'armed' : ''}`} disabled={disabled} title={title}
+      aria-label={armed ? confirmLabel : label}
+      onClick={() => { if (armed) { setArmed(false); onConfirm(); } else setArmed(true); }}>
+      {armed ? confirmLabel : label}
+    </button>
+  );
+}
+function undoLabel(state: AuctionState) {
+  const last = state.sales[0];
+  return last ? `Undo ${findPlayer(state, last.playerId)?.name} ${dollars(last.highBid)}?` : 'Undo?';
+}
+
+export function CommissionerBar({ state, busy, send }: RoomProps) {
+  const d = state.draft;
+  if (d.status === 'setup' || d.status === 'complete') {
+    return d.status === 'complete' && state.sales.length ? (
+      <div className="commish">
+        <ConfirmButton className="ghost small" label="Undo last sale" confirmLabel={undoLabel(state)} disabled={busy}
+          onConfirm={() => void send({ type: 'undo' })} />
+      </div>
+    ) : null;
+  }
+  return (
+    <div className="commish">
+      <ConfirmButton className="ghost small" label="Undo last sale" confirmLabel={undoLabel(state)}
+        disabled={busy || !state.sales.length} title="Returns the player and refunds the price, then pauses"
+        onConfirm={() => void send({ type: 'undo' })} />
+      <ConfirmButton className="ghost small" label="Force end"
+        confirmLabel={state.lot ? `Sell to ${nameOf(state, state.lot.highBidderId)} ${dollars(state.lot.highBid)}?` : 'Sell?'}
+        disabled={busy || !state.lot} title="Sell now to the high bidder"
+        onConfirm={() => state.lot && void send({ type: 'force', lotId: state.lot.id })} />
+      <button className="secondary small" disabled={busy}
+        onClick={() => void send({ type: d.status === 'paused' ? 'resume' : 'pause' })}>
+        {d.status === 'paused' ? 'Resume' : 'Pause'}
+      </button>
+    </div>
+  );
+}
+
+export function turnsUntil(state: AuctionState, me: Manager) {
+  const { status, phase, nominatorId } = state.draft;
+  if (status !== 'running' && status !== 'paused') return null;
+  if (nominatorId === me.id && phase === 'nomination') return 0;
+  if (!mayNominate(state, me)) return null;
+  const position = upcomingNominators(state).indexOf(me.id);
+  return position < 0 ? null : position + 1;
 }

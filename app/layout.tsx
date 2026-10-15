@@ -1,9 +1,16 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
+import { Barlow_Condensed, IBM_Plex_Sans } from 'next/font/google';
 import './globals.css';
+
+const display = Barlow_Condensed({ subsets: ['latin'], weight: ['600', '700'], variable: '--font-display' });
+const body = IBM_Plex_Sans({ subsets: ['latin'], weight: ['400', '500', '600'], variable: '--font-body' });
+
 export const metadata: Metadata = {
   title: 'Pancake Auction',
-  description: 'NBA dynasty startup auction room'
+  description: 'Live startup auction room for the Pancake dynasty league'
 };
+export const viewport: Viewport = { width: 'device-width', initialScale: 1, themeColor: '#e8ecf1' };
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return <html lang="en"><body>{children}</body></html>;
+  return <html lang="en" className={`${display.variable} ${body.variable}`}><body>{children}</body></html>;
 }
