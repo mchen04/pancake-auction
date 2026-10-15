@@ -6,7 +6,7 @@ import {
   BlockPanel, CommissionerBar, PoolPanel, ResultsPanel, RosterPanel, TeamsPanel, turnsUntil
 } from './components';
 import type { Action, AuctionState, Manager, Player } from '../lib/types';
-import { retryAbortedMutation } from '../lib/mutation-retry';
+import { mutationErrorMessage, retryAbortedMutation } from '../lib/mutation-retry';
 
 type Tab = 'players' | 'teams' | 'roster' | 'results';
 const tabs: [Tab, string][] = [['players', 'Players'], ['teams', 'Teams'], ['roster', 'My roster'], ['results', 'Results']];
@@ -108,7 +108,7 @@ export default function Room() {
         setToken(result.value);
       }
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : 'Request failed');
+      setError(mutationErrorMessage(failure));
     } finally {
       setBusy(false);
       pending.current = false;
