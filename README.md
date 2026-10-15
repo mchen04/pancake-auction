@@ -33,6 +33,8 @@ Set `EVIDENCE_DIR` outside the repository. The containment check resolves physic
 
 Each test command and simulation creates a fresh anonymous local Convex backend with its own ports, data directory, and private CLI configuration. The harness removes that state and stops its processes afterward. No existing deployment, credentials, or database is used. Tests fail if the backend cannot start. Fixtures replace all Sleeper requests in importer tests.
 
+Shutdown uses the CLI's graceful SIGINT path. Each close checks that both native listener ports are closed.
+
 `verify` runs typecheck, lint, unit tests, backend integration tests, component and browser regressions, subscription-volume checks, a production build, layout and import-and-sale checks, three fast full drafts, and one real-timing full draft. It records each exit code and log path. Simulations import the stored public Sleeper pool fixture with its original fetchedAt; they never re-pull data. Ten independent Convex HTTP clients claim seats and call the public API concurrently. A separate process restores a saved token during each run.
 
 Bots draw valuations from the seed, projection, dynasty ADP, manager bias, noise, and positional need. They raise concurrently with mixed increments, snipe, bid maximums, give up, or await expiry. Fast clocks use 3/3/1.5/4.5 seconds; real clocks use 10/10/5/15. Every draft requires 400 accepted bids, 25 expiry sales, three nomination timeouts, five exact-maximum bids, an average unspent budget below $150, and 200 active players. The independent event replay retains all 18 invariants. Run summaries record the per-seed spread.

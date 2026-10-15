@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { appendFile, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
+import { createConnection, createServer } from 'node:net';
 import { resolve } from 'node:path';
 import { ConvexHttpClient } from 'convex/browser';
 import { makeFunctionReference } from 'convex/server';
@@ -28,11 +28,26 @@ export async function freePort(): Promise<number> {
     await new Promise<void>(resolve => server.close(() => resolve()));
     return address.port;
 }
-export async function stopProcess(child: ChildProcess) {
+export async function stopProcess(child: ChildProcess, signal: NodeJS.Signals = 'SIGTERM') {
     if (child.exitCode !== null || child.signalCode !== null) return;
     const stopped = new Promise<void>(resolve => child.once('exit', () => resolve()));
-    child.kill('SIGTERM');
+    child.kill(signal);
     await stopped;
+}
+async function requireClosedPort(port: number) {
+    await new Promise<void>((resolve, reject) => {
+        const socket = createConnection({ host: '127.0.0.1', port });
+        socket.once('connect', () => {
+            socket.destroy();
+            reject(new Error(`Local backend listener ${port} did not stop`));
+        });
+        socket.once('error', error => {
+            socket.destroy();
+            if ('code' in error && error.code === 'ECONNREFUSED') resolve();
+            else reject(error);
+        });
+        socket.setTimeout(2000, () => { socket.destroy(); reject(new Error('Listener shutdown check timed out')); });
+    });
 }
 export async function localBackend(label: string, fixtures = false) {
     const evidence = evidenceDirectory(process.env.EVIDENCE_DIR, true)!;
@@ -75,13 +90,16 @@ async function startBackend(label: string, fixtures: boolean, directory: string,
     const url = `http://127.0.0.1:${port}`;
     const client = new ConvexHttpClient(url);
     const close = async () => {
-        await stopProcess(child);
+        await stopProcess(child, 'SIGINT');
+        let nativePortsClosed = false;
         try {
+            await Promise.all([requireClosedPort(port), requireClosedPort(sitePort)]);
+            nativePortsClosed = true;
             await writeFile(`${evidence}/backend-${label}.log`, log);
         } finally {
             await rm(directory, { recursive: true, force: true });
             await appendFile(`${evidence}/local-backends.jsonl`, JSON.stringify({ label, action: 'close',
-                pid: child.pid, port, sitePort, directoryRemoved: true }) + '\n');
+                pid: child.pid, port, sitePort, directoryRemoved: true, nativePortsClosed }) + '\n');
         }
     };
     try {
