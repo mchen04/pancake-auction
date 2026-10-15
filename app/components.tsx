@@ -159,7 +159,7 @@ function remainingMs(draft: Draft, clock: number, offset: number) {
   if (draft.status !== 'running' || draft.deadline === null) return null;
   return Math.max(0, draft.deadline - clock - offset);
 }
-export function ShotClock({ draft, offset }: { draft: Draft; offset: number }) {
+export function ShotClock({ draft, offset, compact = false }: { draft: Draft; offset: number; compact?: boolean }) {
   const [clock, setClock] = useState(0);
   useEffect(() => {
     setClock(Date.now());
@@ -174,7 +174,8 @@ export function ShotClock({ draft, offset }: { draft: Draft; offset: number }) {
   if (draft.status === 'setup' || draft.status === 'complete') return null;
   const caption = draft.status === 'paused' ? 'Paused' : draft.phase === 'bidding' ? 'Bid clock' : 'Nomination';
   return (
-    <div className={`shot-clock ${urgent ? 'urgent' : ''} ${draft.status === 'paused' ? 'frozen' : ''}`}
+    <div className={['shot-clock', compact ? 'compact' : '', urgent ? 'urgent' : '',
+      draft.status === 'paused' ? 'frozen' : ''].join(' ')}
       role="timer" aria-label={`${caption}: ${digits} seconds`}>
       <span className="digits">{digits}</span>
       <span className="caption">{caption}</span>
@@ -221,6 +222,14 @@ export function PoolPanel(props: RoomProps & { opening: number }) {
       <div className="pool-filters">
         <input type="search" aria-label="Search players or team" placeholder="Search name or team"
           value={search} onChange={event => { setSearch(event.target.value); setLimit(150); }} />
+        <select className="position-select" aria-label="Filter players by position" value={position}
+          onChange={event => setPosition(event.target.value)}>
+          {['', 'PG', 'SG', 'SF', 'PF', 'C', 'TAXI', 'OUT'].map(value => (
+            <option key={value || 'all'} value={value}>
+              {value === '' ? 'All' : value === 'TAXI' ? 'Taxi' : value === 'OUT' ? 'Out' : value}
+            </option>
+          ))}
+        </select>
         <div className="segmented" role="group" aria-label="Filter players">
           {['', 'PG', 'SG', 'SF', 'PF', 'C', 'TAXI', 'OUT'].map(value => (
             <button key={value || 'all'} aria-pressed={position === value} onClick={() => setPosition(value)}>
@@ -304,7 +313,7 @@ function bidBlocker(props: RoomProps, maximum: number, passed: boolean) {
   return '';
 }
 
-function BidControls(props: RoomProps & { player: Player | undefined }) {
+function BidControls(props: RoomProps & { player: Player | undefined; offset: number }) {
   const { state, me, send, player } = props;
   const lot = state.lot!;
   const [custom, setCustom] = useState('');
@@ -321,6 +330,7 @@ function BidControls(props: RoomProps & { player: Player | undefined }) {
         <strong>{dollars(lot.highBid)}</strong>
         <span>{lot.highBidderId === me.id ? 'You lead' : `${nameOf(state, lot.highBidderId)} leads`}</span>
         <small>Nominated by {nameOf(state, lot.nominatorId)}</small>
+        <ShotClock draft={state.draft} offset={props.offset} compact />
       </p>
       <div className="bid-buttons">
         {[1, 5].map(step => (
@@ -543,6 +553,9 @@ export function TeamsPanel({ state, me, busy, send }: RoomProps) {
               <span className="team-name">
                 <b>{manager.name}</b>
                 {status.text && <span className={`status ${status.tone}`}>{status.text}</span>}
+                {live && turnLabel !== '—' && (
+                  <span className="turn-inline">{turnLabel === 'Now' ? 'Nominating' : `Turn ${turnLabel}`}</span>
+                )}
               </span>
               <span className="num">{dollars(manager.budget)}</span>
               <span className="num">{dollars(maximum)}</span>

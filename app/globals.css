@@ -613,6 +613,31 @@ input {
   font-size: 22px;
   line-height: 1;
 }
+.shot-clock.compact {
+  width: auto;
+  height: auto;
+  min-width: 64px;
+  margin-left: auto;
+  padding: 4px 8px 6px;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
+  border-radius: 6px;
+}
+.shot-clock.compact .digits {
+  font-size: 22px;
+}
+.shot-clock.compact .caption {
+  margin-top: 0;
+  font-size: 9px;
+  letter-spacing: .8px;
+}
+.shot-clock.compact .drain {
+  height: 3px;
+}
+.position-select, .turn-inline {
+  display: none;
+}
 .bid-buttons {
   display: flex;
   gap: 6px;
@@ -968,6 +993,18 @@ input {
   }
 }
 
+@media (max-width: 1399px) {
+  .pool-row .name {
+    flex-wrap: wrap;
+    row-gap: 2px;
+    padding: 5px 0;
+  }
+  .pool-row .name .name-button {
+    flex-basis: 100%;
+    white-space: normal;
+  }
+}
+
 @media (max-width: 1219px) {
   .narrow-only {
     display: revert;
@@ -1010,15 +1047,6 @@ input {
   }
   .roster .panel-head h2 {
     display: none;
-  }
-  .pool-row .name {
-    flex-wrap: wrap;
-    row-gap: 2px;
-    padding: 5px 0;
-  }
-  .pool-row .name .name-button {
-    flex-basis: 100%;
-    white-space: normal;
   }
   .small, .segmented button, .placement button, .tabbar button, .opening button, .opening input, .nominate,
   .pool-filters input {
@@ -1199,8 +1227,29 @@ input {
   .team-grid.with-turn.with-admin > :nth-child(7) {
     visibility: hidden;
   }
-  .team-grid.with-turn.with-admin .status.turn {
+  .team-grid.with-turn.with-admin .turn-inline {
     display: inline;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .block.bidding .block-top > .shot-clock {
+    display: none;
+  }
+  .pool-filters {
+    grid-template-columns: minmax(0, 1fr) 92px;
+  }
+  .pool-filters .segmented {
+    display: none;
+  }
+  .position-select {
+    display: block;
+    min-height: 40px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel);
+    font: inherit;
+    padding: 0 8px;
   }
   .team-row.with-admin {
     min-height: 44px;
