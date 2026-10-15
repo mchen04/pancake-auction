@@ -191,9 +191,14 @@ async function main() {
                             await browser('scroll', 'down', '1000', '--selector', selector);
                             const detail = await evaluate(`(() => {
                                 const box=document.querySelector('.block-information')||document.querySelector('.block');
-                                const last=document.querySelector('.block .details').lastElementChild;
+                                const group=document.querySelector('.block .details').lastElementChild;
+                                const last=group.lastElementChild ?? group;
                                 return {bottom:last.getBoundingClientRect().bottom,top:last.getBoundingClientRect().top,
-                                    box:box?.getBoundingClientRect().toJSON(),scrollTop:box?.scrollTop};})()`);
+                                    box:box?.getBoundingClientRect().toJSON(),scrollTop:box?.scrollTop,
+                                    overflowY:box?getComputedStyle(box).overflowY:null,
+                                    overflows:box?box.scrollHeight>box.clientHeight+1:false};})()`);
+                            const userScrollable = !detail.overflows || ['auto', 'scroll'].includes(detail.overflowY);
+                            assert(userScrollable, `Details overflow a ${detail.overflowY} container`);
                             const reachable = detail.box && detail.bottom <= detail.box.bottom + 1
                                 && detail.top >= detail.box.top - 1;
                             assert(reachable, 'Last detail row is unreachable');

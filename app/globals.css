@@ -1125,8 +1125,25 @@ input {
   .block-information > * {
     flex: none;
   }
-  .block.details-open .pinned-lead {
+  .pinned-lead {
     display: flex;
+    flex-wrap: wrap;
+  }
+  .pinned-lead strong {
+    font-size: 24px;
+  }
+  .pinned-lead small {
+    color: var(--faint);
+    font-weight: 500;
+    font-size: 12px;
+  }
+  .block-information .high-bid {
+    display: none;
+  }
+  .team-name {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
   }
   .block > .bid-controls, .block > .last-win {
     flex: none;

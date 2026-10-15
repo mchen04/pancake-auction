@@ -317,9 +317,10 @@ function BidControls(props: RoomProps & { player: Player | undefined }) {
   const canGiveUp = !passed && lot.highBidderId !== me.id && state.draft.status === 'running' && !props.busy;
   return (
     <div className="bid-controls">
-      <p className="pinned-lead" aria-hidden="true">
+      <p className="pinned-lead">
         <strong>{dollars(lot.highBid)}</strong>
         <span>{lot.highBidderId === me.id ? 'You lead' : `${nameOf(state, lot.highBidderId)} leads`}</span>
+        <small>Nominated by {nameOf(state, lot.nominatorId)}</small>
       </p>
       <div className="bid-buttons">
         {[1, 5].map(step => (
@@ -469,8 +470,7 @@ export function BlockPanel(props: RoomProps & { offset: number; opening: number;
   const showDetails = lot !== null && detailsFor === lot.id;
   const player = findPlayer(state, lot?.playerId);
   return (
-    <section className={`panel block ${lot ? 'bidding' : ''} ${showDetails ? 'details-open' : ''}`}
-      aria-label="Current player">
+    <section className={`panel block ${lot ? 'bidding' : ''}`} aria-label="Current player">
       <div className="block-information">
         <div className="block-top">
           <div className="block-main">
