@@ -536,7 +536,8 @@ export function TeamsPanel(props: RoomProps) {
         <div className={`table-head team-grid ${seatsEditable ? 'with-admin' : ''} ${live ? 'with-turn' : ''}`}>
           <span>Team</span><span>Left</span><span title={current ? `Max bid on ${current.name}` : 'Max bid'}>Max</span>
           <span>Active</span><span>Taxi</span><span>IR</span>
-          {live && <span title="Nominations until this team's turn">Turn</span>}{seatsEditable && <span />}
+          {live && <span title="Nominations until this team's turn">Turn</span>}
+          {seatsEditable && <span className="team-release-heading" />}
         </div>
         {state.managers.map(manager => {
           const entries = entriesOf(state, manager.id);
@@ -582,7 +583,7 @@ export function TeamsPanel(props: RoomProps) {
                   </span>
                 )}
                 {seatsEditable && (
-                  <span>
+                  <span className="team-release">
                     {manager.claimed && manager.id !== me.id && seatsEditable && (
                       <ConfirmButton className="release ghost small" label="Release" confirmLabel={`Release ${manager.name}?`}
                         disabled={busy}

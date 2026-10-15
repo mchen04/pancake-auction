@@ -160,7 +160,7 @@ async function main() {
         await browser('eval', 'document.fonts.ready.then(()=>true)');
         await writeFile(`${dir}/snapshot.txt`, await browser('snapshot'));
         for (const [width, height] of [[1180,768],[1181,768],[1200,768],[1219,768],[1220,768],
-            [1280,720],[1440,900],[1024,768],[390,844]]) {
+            [1280,720],[1440,900],[1024,768],[390,844],[360,640],[375,667]]) {
             await check(`C16 viewport ${width}x${height} keeps controls and sale prices inside panels`, async () => {
                 await browser('set', 'viewport', String(width), String(height));
                 const proofs = [];
@@ -180,17 +180,37 @@ async function main() {
                 return proofs;
             });
         }
-        for (const height of [667, 844]) {
-            await browser('set', 'viewport', '390', String(height));
+        for (const [width, height] of [[390,667],[390,844],[360,640],[375,667]]) {
+            await browser('set', 'viewport', String(width), String(height));
             for (const expanded of [false, true]) {
                 await browser('open', `http://127.0.0.1:${address.port}`);
                 await browser('wait', '.room');
-                if (expanded) await browser('find', 'role', 'button', 'click', '--name', 'Details', '--exact');
+                if (expanded) {
+                    const control = await evaluate(`(() => {
+                        const button=document.querySelector('.lot-heading button');
+                        const scroll=button.closest('.block-information');
+                        const r=button.getBoundingClientRect(),s=scroll.getBoundingClientRect();
+                        scroll.scrollTop+=r.top-s.top-(scroll.clientHeight-r.height)/2;
+                        const b=button.getBoundingClientRect();
+                        return {button:b.toJSON(),panel:s.toJSON(),scrollTop:scroll.scrollTop,
+                            scrollHeight:scroll.scrollHeight,clientHeight:scroll.clientHeight,
+                            hit:document.elementFromPoint((b.left+b.right)/2,(b.top+b.bottom)/2)?.outerHTML,
+                            visible:b.top>=s.top&&b.bottom<=s.bottom
+                                &&button.contains(document.elementFromPoint((b.left+b.right)/2,(b.top+b.bottom)/2))};
+                    })()`);
+                    await writeFile(`${dir}/detail-control-${width}-${height}.json`, JSON.stringify(control,null,2));
+                    await browser('screenshot', `${dir}/detail-control-${width}-${height}.png`);
+                    assert(control.visible, 'Details must be visible before clicking');
+                    await browser('find', 'role', 'button', 'click', '--name', 'Details', '--exact');
+                    assert.equal(await evaluate(`document.querySelector('.lot-heading button')
+                        .getAttribute('aria-expanded')`), 'true');
+                }
                 for (const tab of ['Players', 'Teams', 'My roster', 'Results']) {
-                    await check(`C17 ${height} ${tab} details ${expanded ? 'expanded' : 'collapsed'}`, async () => {
+                    const size = width === 390 ? String(height) : `${width}x${height}`;
+                    await check(`C17 ${size} ${tab} details ${expanded ? 'expanded' : 'collapsed'}`, async () => {
                         await browser('find', 'role', 'tab', 'click', '--name', tab, '--exact');
                         const proof = await evaluate(geometry);
-                        const path = `${dir}/phone-${height}-${tab}-${expanded}.json`;
+                        const path = `${dir}/phone-${width}-${height}-${tab}-${expanded}.json`;
                         await writeFile(path, JSON.stringify(proof, null, 2));
                         assertFrame(proof);
                         assert(proof.tabHeight >= 100, `Selected tab scroll height ${proof.tabHeight} below 100px`);
@@ -221,9 +241,10 @@ async function main() {
                         return proof;
                     });
                 }
-                await browser('screenshot', `${dir}/phone-${height}-${expanded}.png`);
+                await browser('screenshot', `${dir}/phone-${width}-${height}-${expanded}.png`);
             }
         }
+        await browser('set', 'viewport', '390', '844');
         await check('C17 Hide details keyboard recovery restores My roster', async () => {
             const scroll = await evaluate('Boolean(document.querySelector(".block-information"))');
             await browser('scroll', 'up', '1000', '--selector', scroll ? '.block-information' : '.block');

@@ -162,7 +162,9 @@ async function main() {
     await mkdir(evidence, { recursive: true });
     const isolated = await createIsolated('test');
     await seedManagers(); await seedPlayers(players);
-    const token = await claimSeat(1), memberToken = await claimSeat(2);
+    const tokens = await Promise.all(Array.from({ length: 10 }, (_, index) => claimSeat(index + 1)));
+    const token = tokens[0];
+    let memberToken = tokens[1];
     let viewerToken = token;
     await build({ entryPoints: ['tests/layout-harness.tsx'], outfile: `${evidence}/bundle.js`, bundle: true,
         platform: 'browser', format: 'esm', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' } });
@@ -240,26 +242,49 @@ async function main() {
     async function teamNames() {
         return evaluate<{
             names: { name: string; clientWidth: number; scrollWidth: number; gap: number;
-                cueVisible: boolean; buttonFits: boolean; aligned: boolean }[];
+                cueVisible: boolean; buttonFits: boolean; aligned: boolean;
+                lines: { text: string; fits: boolean; width: number; scrollWidth: number }[] }[];
+            columns: { text: string; fits: boolean; excluded: string | null }[];
             admin: boolean; turn: boolean; gutter: number; document: number[]; viewport: number[];
         }>(`(() => {
             const scroll=document.querySelector('.teams .scroll');
             const header=document.querySelector('.teams .table-head');
-            const names=[...document.querySelectorAll('.team-inspect')].map(button=>{
-                const row=button.closest('.team-row'),r=row.getBoundingClientRect(),s=scroll.getBoundingClientRect();
+            const excluded=(child,index)=>{
+                const style=getComputedStyle(child),r=child.getBoundingClientRect();
+                if(index===6&&child.parentElement.classList.contains('with-turn')
+                    &&style.visibility==='hidden'&&r.width===0)return 'hidden-zero-width-turn';
+                if(child.matches('.team-release,.team-release-heading')&&style.display==='none')
+                    return 'collapsed-seat-control';
+                if(child.matches('.team-release')&&style.gridColumnEnd==='-1')return 'expanded-seat-control';
+                return null;
+            };
+            const columns=[header,...document.querySelectorAll('.team-row')].flatMap(row=>
+                [...row.children].slice(1).map((child,index)=>({text:child.textContent,
+                    fits:child.scrollWidth<=child.clientWidth,excluded:excluded(child,index+1)})));
+            const names=[...document.querySelectorAll('.team-row')].map(row=>{
+                const cellElement=row.querySelector('.team-name');
+                const button=cellElement.querySelector('.team-inspect')??cellElement.querySelector('b');
+                const r=row.getBoundingClientRect(),s=scroll.getBoundingClientRect();
                 scroll.scrollTop+=r.top-s.top-(scroll.clientHeight-r.height)/2;
-                const name=button.querySelector('.team-inspect-name'),cue=button.querySelector('.team-inspect-cue');
-                const n=name.getBoundingClientRect(),c=cue.getBoundingClientRect(),b=button.getBoundingClientRect();
-                const cell=button.closest('.team-name').getBoundingClientRect(),v=scroll.getBoundingClientRect();
+                const name=button.querySelector('.team-inspect-name')??button;
+                const cue=button.querySelector('.team-inspect-cue');
+                const n=name.getBoundingClientRect(),c=cue?.getBoundingClientRect(),b=button.getBoundingClientRect();
+                const cell=cellElement.getBoundingClientRect(),v=scroll.getBoundingClientRect();
+                const lines=[...cellElement.querySelectorAll('.status,.turn-inline')]
+                    .filter(line=>getComputedStyle(line).display!=='none').map(line=>{
+                        const l=line.getBoundingClientRect();return {text:line.textContent,width:line.clientWidth,
+                            scrollWidth:line.scrollWidth,fits:line.scrollWidth<=line.clientWidth
+                                &&l.left>=cell.left&&l.right<=cell.right+0.1&&l.bottom<=cell.bottom+0.1};});
                 return {name:name.textContent,clientWidth:name.clientWidth,scrollWidth:name.scrollWidth,
-                    gap:c.left-n.right,cueVisible:c.width>0&&c.height>0&&c.top>=v.top&&c.bottom<=v.bottom
+                    gap:c?c.left-n.right:null,cueVisible:!!c&&c.width>0&&c.height>0&&c.top>=v.top&&c.bottom<=v.bottom
                         &&c.left>=b.left&&c.right<=b.right,
-                    buttonFits:b.left>=cell.left&&b.right<=cell.right,
+                    buttonFits:b.left>=cell.left&&b.right<=cell.right,lines,
                     aligned:[...row.children].every((child,index)=>{
+                        if(excluded(child,index))return true;
                         const a=child.getBoundingClientRect(),h=header.children[index].getBoundingClientRect();
                         return Math.abs(a.left-h.left)<1&&Math.abs(a.right-h.right)<1;})};
             });
-            return {names,admin:header.classList.contains('with-admin'),turn:header.classList.contains('with-turn'),
+            return {names,columns,admin:header.classList.contains('with-admin'),turn:header.classList.contains('with-turn'),
                 gutter:scroll.offsetWidth-scroll.clientWidth,
                 document:[document.documentElement.scrollWidth,document.documentElement.scrollHeight],
                 viewport:[innerWidth,innerHeight]};
@@ -267,17 +292,19 @@ async function main() {
     }
     try {
         const nameViewports = [[1180,768],[1181,768],[1200,768],[1219,768],[1220,768],
-            [1280,720],[1440,900],[1024,768],[390,844],[390,667]];
+            [1280,720],[1440,900],[1024,768],[390,844],[390,667],[360,640],[375,667]];
         for (const [width, height] of nameViewports) {
             for (const commissioner of [true, false]) {
-                for (const live of [true, false]) {
-                    const role = commissioner ? 'commissioner' : 'member', phase = live ? 'live' : 'setup';
-                    const label = `${width}x${height}-${role}-${phase}`;
+                for (const status of ['paused','running','setup'] as const) {
+                    const live = status !== 'setup';
+                    const role = commissioner ? 'commissioner' : 'member', phase = status === 'paused' ? 'live' : status;
+                    const label = `${width}x${height}-${role}-${phase}${width < 390 ? '-narrow' : ''}`;
                     await check(`${label} team names stay complete beside their cues`, async () => {
                         viewerToken = commissioner ? token : memberToken;
                         const state = await seed('partial');
                         if (!live) await configure({ draft: { status: 'setup', phase: 'nomination',
                             lotId: null, nominatorId: null, deadline: null, remainingMs: null } });
+                        else if (status === 'running') await configure({ draft: { status, deadline: null } });
                         await browser('set', 'viewport', String(width), String(height)); await open();
                         if (width <= 860) await tab('Teams');
                         const normal = await teamNames();
@@ -287,20 +314,37 @@ async function main() {
                                 +'.teams .scroll::-webkit-scrollbar{width:15px}';
                             document.head.append(style);return true;})()`);
                         const reserved = await teamNames();
-                        const proof = { normal, reserved };
+                        let nomination: Awaited<ReturnType<typeof teamNames>> | null = null;
+                        if (live) {
+                            await configure({ draft: { phase: 'nomination', lotId: null,
+                                nominatorId: 5, turnIndex: 4, deadline: null } });
+                            await until(`document.querySelector('[aria-controls="team-roster-5"]')
+                                .closest('.team-row').textContent.includes('Nominating')`);
+                            nomination = await teamNames();
+                        }
+                        const proof = { normal, reserved, nomination };
                         await writeFile(`${evidence}/${label}-team-names.json`, JSON.stringify(proof,null,2));
                         await browser('scroll', 'up', '2000', '--selector', '.teams .scroll');
                         await browser('screenshot', `${evidence}/${label}-team-names.png`);
                         assert(reserved.gutter >= 15, 'The scrollbar control must reserve real browser space');
-                        for (const layout of [normal, reserved]) {
-                            assert.equal(layout.admin, commissioner); assert.equal(layout.turn, live);
+                        for (const layout of [normal, reserved, ...(nomination ? [nomination] : [])]) {
+                            assert.equal(layout.admin, commissioner && status !== 'running');
+                            assert.equal(layout.turn, live);
                             assert.deepEqual(layout.names.map(row => row.name), state.managers.map(row => row.name));
                             assert(layout.document[0] <= width && layout.document[1] <= height);
                             for (const name of layout.names) {
                                 assert(name.scrollWidth <= name.clientWidth, `${name.name} must not truncate`);
                                 assert(name.gap >= 0 && name.gap <= 5, `${name.name}'s cue must stay beside its name`);
                                 assert(name.cueVisible && name.buttonFits && name.aligned);
+                                for (const line of name.lines) assert(line.fits, `${name.name}: ${line.text} must fit`);
                             }
+                            for (const column of layout.columns) {
+                                if (!column.excluded) assert(column.fits, `Data column must fit: ${column.text}`);
+                            }
+                            const hiddenTurns = layout.columns.filter(column =>
+                                column.excluded === 'hidden-zero-width-turn');
+                            assert.equal(hiddenTurns.length,
+                                live && commissioner && status !== 'running' && width <= 860 ? 11 : 0);
                         }
                         return proof;
                     });
@@ -308,6 +352,63 @@ async function main() {
             }
         }
         viewerToken = token;
+        await check('360x640 narrow nomination and Done lines remain readable', async () => {
+            await seed('full'); await configure({ managers: [{ id: 1, done: true },{ id: 2, done: true }],
+                draft: { status: 'paused', phase: 'nomination', lotId: null, nominatorId: 5, turnIndex: 4 } });
+            await browser('set', 'viewport', '360', '640'); await open(); await tab('Teams');
+            const proof = await teamNames();
+            await writeFile(`${evidence}/360x640-nomination-status.json`, JSON.stringify(proof,null,2));
+            await browser('scroll', 'up', '2000', '--selector', '.teams .scroll');
+            await browser('screenshot', `${evidence}/360x640-nomination-status.png`);
+            await evaluate(`(() => {
+                const row=document.querySelectorAll('.team-row')[4],scroll=row.closest('.scroll');
+                const r=row.getBoundingClientRect(),s=scroll.getBoundingClientRect();
+                scroll.scrollTop+=r.top-s.top-(scroll.clientHeight-r.height)/2;return true;})()`);
+            await browser('screenshot', `${evidence}/360x640-nominator.png`);
+            const nominator = proof.names.find(manager => manager.name === 'Kyle')!;
+            assert(nominator.lines.some(line => line.text.trim() === 'Nominating'));
+            assert(nominator.lines.every(line => line.fits), 'Kyle: Nominating must fit');
+            for (const manager of proof.names) {
+                for (const line of manager.lines) assert(line.fits, `${manager.name}: ${line.text} must fit`);
+            }
+            return proof;
+        });
+        for (const [width, height] of [[360,640],[375,667]]) {
+            for (const status of ['paused','setup'] as const) {
+                await check(`${width}x${height} narrow ${status} Release stays reachable with keyboard confirmation`,
+                    async () => {
+                        viewerToken = token; await seed('partial');
+                        if (status === 'setup') await configure({ draft: { status, lotId: null, nominatorId: null } });
+                        await browser('set', 'viewport', String(width), String(height)); await open(); await tab('Teams');
+                        const selector = '.team-row:has([aria-controls="team-roster-2"]) .release';
+                        assert(await evaluate(`!document.querySelector(${JSON.stringify(selector)}).getClientRects().length`));
+                        await inspectTeam(2); await browser('press', 'Tab');
+                        await until(`document.activeElement===document.querySelector(${JSON.stringify(selector)})`);
+                        assertSlots(await evaluate<Measurements>(measure('#team-roster-2')), await getState(), 2, true);
+                        const proof = await teamNames();
+                        assert(proof.names.every(manager => manager.aligned));
+                        assert(await evaluate(`(() => {
+                            const button=document.querySelector(${JSON.stringify(selector)});
+                            const scroll=button.closest('.scroll'),r=button.getBoundingClientRect();
+                            const s=scroll.getBoundingClientRect();
+                            scroll.scrollTop+=r.top-s.top-(scroll.clientHeight-r.height)/2;
+                            const b=button.getBoundingClientRect();
+                            return b.left>=s.left&&b.right<=s.right&&b.top>=s.top&&b.bottom<=s.bottom
+                                &&button.contains(document.elementFromPoint((b.left+b.right)/2,(b.top+b.bottom)/2));
+                        })()`));
+                        await browser('focus', selector); await browser('press', 'Enter');
+                        assert.equal((await getState()).managers[1].claimed, true);
+                        assert(await evaluate(`document.querySelector(${JSON.stringify(selector)})
+                            .textContent.includes('Release Matthew?')`));
+                        await browser('screenshot', `${evidence}/${width}x${height}-${status}-release-confirm.png`);
+                        await browser('press', 'Enter');
+                        await until(`!document.querySelector(${JSON.stringify(selector)})`);
+                        assert.equal((await getState()).managers[1].claimed, false);
+                        memberToken = await claimSeat(2);
+                        return proof;
+                    });
+            }
+        }
         for (const [width, height] of [[1440,900],[390,844]]) {
             await check(`${width}x${height} team disclosure is visible without hover and follows inspection`, async () => {
                 await browser('set', 'viewport', String(width), String(height));
