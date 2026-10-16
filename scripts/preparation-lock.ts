@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { promisify } from 'node:util';
 import { DatabaseSync } from 'node:sqlite';
@@ -49,6 +49,17 @@ function retirementMutex(path: string) {
         finally { database.close(); }
     };
 }
+async function sweepPreparation(cache: string) {
+    for (const name of await readdir(cache)) {
+        if (!['prepare.lock.candidate-', 'prepare.lock.retired-'].some(prefix => name.startsWith(prefix))) continue;
+        const path = `${cache}/${name}`;
+        const stat = await lstat(path).catch(() => null);
+        if (!stat?.isDirectory() || Date.now() - stat.mtimeMs < 24 * 60 * 60 * 1000) continue;
+        const previous = await snapshot(path);
+        if (!previous || previous.owner && !await gone(previous.owner)) continue;
+        if ((await snapshot(path))?.stamp === previous.stamp) await rm(path, { recursive: true, force: true });
+    }
+}
 export async function preparationLock(cache: string, options: Options = {}) {
     const path = `${cache}/prepare.lock`;
     const owner: Owner = { host: hostname(), pid: process.pid, startedAt: Date.now(), token: randomUUID(),
@@ -66,15 +77,20 @@ export async function preparationLock(cache: string, options: Options = {}) {
                 throw new Error(`Local Convex binary preparation is still owned: ${JSON.stringify(previous?.owner)}`);
             }
             if (!previous) {
-                try {
-                    await rename(candidate, path);
-                    return async () => {
+                let acquired = false;
+                try { await rename(candidate, path); acquired = true; }
+                catch (error) {
+                    if (!['EEXIST', 'ENOTEMPTY', 'ENOENT'].includes((error as NodeJS.ErrnoException).code!)) throw error;
+                }
+                if (acquired) {
+                    const release = async () => {
                         if ((await snapshot(path))?.owner?.token === owner.token) {
                             await rm(path, { recursive: true, force: true });
                         }
                     };
-                } catch (error) {
-                    if (!['EEXIST', 'ENOTEMPTY', 'ENOENT'].includes((error as NodeJS.ErrnoException).code!)) throw error;
+                    try { await sweepPreparation(cache); }
+                    catch (error) { await release(); throw error; }
+                    return release;
                 }
             } else {
                 if (observed?.stamp !== previous.stamp) observed = { stamp: previous.stamp, since: performance.now() };

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
-import { access, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import filesystem from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
@@ -103,6 +103,73 @@ async function main() {
         }
     }
     try {
+        async function candidateFor(cache: string, pid: number) {
+            const end = performance.now() + 2500;
+            while (performance.now() < end) {
+                for (const name of await readdir(cache)) {
+                    if (!name.startsWith('prepare.lock.candidate-')) continue;
+                    const path = `${cache}/${name}`;
+                    const owner = await readFile(`${path}/owner.json`, 'utf8').then(JSON.parse, () => null);
+                    if (owner?.pid === pid) return path;
+                }
+                await pause(10);
+            }
+            throw new Error('Waiter candidate was not published');
+        }
+        const age = async (path: string) => {
+            const ancient = new Date(Date.now() - 48 * 60 * 60 * 1000);
+            await utimes(path, ancient, ancient);
+        };
+        await check('C39 killed preparation waiter is swept on successful acquisition', async cache => {
+            const owner = owned(cache); await until(owner.acquired);
+            const waiter = owned(cache, 3000);
+            const path = await candidateFor(cache, waiter.child.pid!);
+            await stop(waiter.child, 'SIGKILL'); await age(path);
+            owner.child.send('release'); assert.equal(await owner.closed, 0);
+            const next = owned(cache); await until(next.acquired);
+            assert(!await access(path).then(() => true, () => false), 'Dead old candidate must be reclaimed');
+            next.child.send('release'); assert.equal(await next.closed, 0);
+            return { killedPid: waiter.child.pid, path, recoveredPid: next.child.pid };
+        });
+        await check('C39 live preparation waiter survives sweep and takes over', async cache => {
+            const owner = owned(cache); await until(owner.acquired);
+            const waiter = owned(cache, 4000);
+            const path = await candidateFor(cache, waiter.child.pid!); await age(path);
+            waiter.child.kill('SIGSTOP');
+            owner.child.send('release'); assert.equal(await owner.closed, 0);
+            const next = owned(cache, 4000); await until(next.acquired);
+            assert(await access(path).then(() => true, () => false));
+            next.child.send('release'); assert.equal(await next.closed, 0);
+            waiter.child.kill('SIGCONT');
+            await until(waiter.acquired); waiter.child.send('release'); assert.equal(await waiter.closed, 0);
+            return { liveWaiterPid: waiter.child.pid, takeover: true };
+        });
+        await check('C39 preparation sweep preserves foreign and young candidates and removes old ownerless remnants',
+            async cache => {
+                const foreign = `${cache}/prepare.lock.candidate-foreign`;
+                const ownerless = `${cache}/prepare.lock.candidate-ownerless`;
+                const young = `${cache}/prepare.lock.candidate-young`;
+                const retired = `${cache}/prepare.lock.retired-abandoned`;
+                for (const path of [foreign, ownerless, young, retired]) await mkdir(path);
+                await writeFile(`${foreign}/owner.json`, JSON.stringify({ host: hostname() + '-foreign', pid: process.pid }));
+                await age(foreign); await age(ownerless); await age(retired);
+                const next = owned(cache); await until(next.acquired);
+                assert(await access(foreign).then(() => true, () => false));
+                assert(await access(young).then(() => true, () => false));
+                assert(!await access(ownerless).then(() => true, () => false));
+                assert(!await access(retired).then(() => true, () => false));
+                next.child.send('release'); assert.equal(await next.closed, 0);
+                return { foreignPreserved: true, youngPreserved: true, ownerlessRemoved: true };
+            });
+        await check('C39 preparation timeout removes only its own candidate', async cache => {
+            const owner = owned(cache); await until(owner.acquired);
+            const waiter = owned(cache, 500);
+            const path = await candidateFor(cache, waiter.child.pid!);
+            assert.equal(await waiter.closed, 1);
+            assert(!await access(path).then(() => true, () => false));
+            owner.child.send('release'); assert.equal(await owner.closed, 0);
+            return { waiterPid: waiter.child.pid, removed: true };
+        });
         await check('C35 SIGKILL owner recovers on the next preparation startup', async cache => {
             const first = owned(cache);
             await until(first.acquired);
