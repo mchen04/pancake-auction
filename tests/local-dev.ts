@@ -3,7 +3,7 @@ import {
     copyEvidence as cp, makeEvidenceDirectory as mkdir, makeEvidenceTemporaryDirectory as mkdtemp,
     writeEvidenceFile as writeFile
 } from '../scripts/evidence';
-import { withResources, ownProcess, ownCleanup } from '../scripts/resources';
+import { withResources, ownProcess, ownCleanup, stopOwnedProcess } from '../scripts/resources';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { rm, stat, symlink, readFile } from 'node:fs/promises';
@@ -34,11 +34,7 @@ async function main() {
     let log = '';
     let frontendLog = '';
     const stop = async () => {
-        if (child && child.exitCode === null && child.signalCode === null) {
-            const exited = new Promise(resolve => child!.once('exit', resolve));
-            process.kill(-child.pid!, 'SIGINT');
-            await exited;
-        }
+        if (child) await stopOwnedProcess(child);
         await Promise.all([requireClosedPort(port), requireClosedPort(sitePort)]);
     };
     const start = async () => {
@@ -116,10 +112,8 @@ async function main() {
     } finally {
         if (previousDirectory === undefined) delete process.env.CONVEX_LOCAL_DIR;
         else process.env.CONVEX_LOCAL_DIR = previousDirectory;
-        if (frontend && frontend.exitCode === null && frontend.signalCode === null) {
-            const exited = new Promise(resolve => frontend!.once('exit', resolve));
-            process.kill(-frontend.pid!, 'SIGTERM');
-            await exited;
+        if (frontend) {
+            await stopOwnedProcess(frontend);
             await requireClosedPort(proof.frontendPort as number);
         }
         await stop();

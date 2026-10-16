@@ -3,9 +3,11 @@ import { execFile, type ChildProcess } from 'node:child_process';
 import type { Server, Socket } from 'node:net';
 import { promisify } from 'node:util';
 import { appendEvidenceFile, captureEvidence } from './evidence';
+import { captureGroup, refreshGroup, stopGroup, type OwnedGroup } from './process-group';
 
 const execute = promisify(execFile);
 const active = new AsyncLocalStorage<Resources>();
+const ownedProcesses = new WeakMap<ChildProcess, { close: () => Promise<void>; group?: OwnedGroup; closed: boolean }>();
 export function onceAsync(run: () => Promise<void>) {
     let result: Promise<void> | undefined;
     return () => result ??= run();
@@ -38,7 +40,8 @@ export async function withResources<T>(run: () => Promise<T>) {
                 if (process.env.EVIDENCE_DIR) await appendEvidenceFile(`${process.env.EVIDENCE_DIR}/resources.jsonl`,
                     JSON.stringify({ servers:resources.servers.map(({server,port})=>({port,closed:!server.listening})),
                         processes:resources.processes.map(child=>({pid:child.pid,exitCode:child.exitCode,
-                            signalCode:child.signalCode,closed:child.exitCode!==null||child.signalCode!==null})),
+                            signalCode:child.signalCode,closed:ownedProcesses.get(child)?.closed ?? false,
+                            group:ownedProcesses.get(child)?.group})),
                         browsers:[...resources.browsers].map(([session,state])=>({session,...state})) })+'\n');
             }
         }
@@ -76,15 +79,33 @@ export function ownClient<T extends { close: () => Promise<void> }>(client: T) {
     return client;
 }
 export function ownProcess<T extends ChildProcess>(child: T, signal: NodeJS.Signals = 'SIGTERM', group = false) {
+    if (ownedProcesses.has(child)) return child;
+    const identity = group && child.pid ? captureGroup(child.pid) : undefined;
+    const record = { closed: false, group: identity, close: async () => {} };
+    const observe = () => { if (identity) { try { refreshGroup(identity); } catch {} } };
+    const timer = identity ? setInterval(observe, 100).unref() : undefined;
+    if (identity) { child.stdout?.on('data', observe); child.stderr?.on('data', observe); }
     active.getStore()?.processes.push(child);
-    ownCleanup(async () => {
-        if (child.exitCode !== null || child.signalCode !== null) return;
-        const stopped = new Promise<void>(resolve => child.once('exit', () => resolve()));
-        if (group) process.kill(-child.pid!, signal);
-        else child.kill(signal);
-        await stopped;
+    record.close = ownCleanup(async () => {
+        try {
+            if (identity) await stopGroup(identity, signal);
+            else if (child.exitCode === null && child.signalCode === null) {
+                const stopped = new Promise<void>(resolve => child.once('exit', () => resolve()));
+                child.kill(signal); await stopped;
+            }
+            record.closed = true;
+        } finally {
+            clearInterval(timer);
+            child.stdout?.removeListener('data', observe); child.stderr?.removeListener('data', observe);
+        }
     });
+    ownedProcesses.set(child, record);
     return child;
+}
+export async function stopOwnedProcess(child: ChildProcess) {
+    const record = ownedProcesses.get(child);
+    if (!record) throw new Error('Process was not registered as owned');
+    await record.close();
 }
 export async function runBrowser(session: string, args: string[], timeout = 20000) {
     const scope = active.getStore();
