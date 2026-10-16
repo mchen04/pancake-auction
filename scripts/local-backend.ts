@@ -12,21 +12,9 @@ import { ConvexHttpClient } from 'convex/browser';
 import { makeFunctionReference } from 'convex/server';
 import { evidenceDirectory, repositoryDirectory } from './evidence';
 import { isolatedBackendVersion } from './local-version';
+import { preparationLock } from './preparation-lock';
 
 export const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-async function cacheLock(cache: string) {
-    const path = `${cache}/prepare.lock`;
-    for (let attempt = 0; attempt < 600; attempt++) {
-        try {
-            await mkdirCache(path);
-            return () => rm(path, { recursive: true, force: true });
-        } catch (error) {
-            if (!(error instanceof Error) || !('code' in error) || error.code !== 'EEXIST') throw error;
-            await sleep(100);
-        }
-    }
-    throw new Error('Local Convex binary preparation is busy');
-}
 export async function freePort(): Promise<number> {
     const server = ownServer(createServer());
     await listen(server);
@@ -93,7 +81,7 @@ async function startBackend(label: string, fixtures: boolean, directory: string,
     const cache = resolve(repositoryDirectory, '.convex/backend-binary-cache');
     await mkdirCache(cache, { recursive: true });
     await symlink(cache, `${directory}/cli-home/.cache/convex`, 'dir');
-    const releaseCache = await cacheLock(cache);
+    const releaseCache = await preparationLock(cache);
     const cli = resolve(repositoryDirectory, 'node_modules/convex/bin/main.js');
     const preload = resolve(repositoryDirectory, 'scripts/local-cli.mjs');
     const child = spawn(process.execPath, ['--import', preload, cli, 'dev', '--typecheck', 'disable',
