@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 
 const execute = promisify(execFile);
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-type Owner = { host: string; pid: number; processStart: string; startedAt: number; token: string };
+type Owner = { host: string; pid: number; processStart?: string; startedAt?: number; token?: string };
 type Options = { waitMs?: number; graceMs?: number; pollMs?: number };
 async function snapshot(path: string) {
     const stat = await lstat(path).catch(error => {
@@ -21,8 +21,7 @@ async function snapshot(path: string) {
     let owner: Owner | null = null;
     try {
         const value = JSON.parse(text);
-        if (typeof value.host === 'string' && Number.isInteger(value.pid) && value.pid > 0
-            && typeof value.processStart === 'string' && value.processStart) owner = value;
+        if (typeof value.host === 'string' && Number.isInteger(value.pid) && value.pid > 0) owner = value;
     } catch {}
     const identity = `${stat.dev}:${stat.ino}:${stat.birthtimeMs}:${text}`;
     return { identity, stamp: `${identity}:${stat.mtimeMs}:${stat.ctimeMs}`, owner };
@@ -32,7 +31,7 @@ async function gone(owner: Owner) {
     try { process.kill(owner.pid, 0); }
     catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
     const current = await execute('ps', ['-p', String(owner.pid), '-o', 'lstart=']).catch(() => null);
-    return current !== null && current.stdout.trim() !== owner.processStart;
+    return Boolean(owner.processStart) && current !== null && current.stdout.trim() !== owner.processStart;
 }
 export async function preparationLock(cache: string, options: Options = {}) {
     const path = `${cache}/prepare.lock`;

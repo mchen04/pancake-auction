@@ -161,6 +161,18 @@ async function main() {
             assert.deepEqual(JSON.parse(await readFile(`${cache}/prepare.lock/owner.json`, 'utf8')), owner);
             return { owner, waiterOutput: next.output() };
         });
+        await check('C35 an incomplete record with a live PID keeps exclusion', async cache => {
+            await mkdir(`${cache}/prepare.lock`);
+            const owner = { host: hostname(), pid: process.pid };
+            await writeFile(`${cache}/prepare.lock/owner.json`, JSON.stringify(owner));
+            const next = owned(cache, 400, 100);
+            await until(() => next.child.exitCode !== null);
+            assert.equal(await next.closed, 1);
+            assert(!next.acquired());
+            assert(next.output().includes(String(process.pid)), next.output());
+            assert.deepEqual(JSON.parse(await readFile(`${cache}/prepare.lock/owner.json`, 'utf8')), owner);
+            return { owner, waiterOutput: next.output() };
+        });
         await check('C35 normal failure releases preparation ownership', async cache => {
             const first = owned(cache);
             await until(first.acquired);
