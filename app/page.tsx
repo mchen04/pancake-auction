@@ -31,6 +31,7 @@ export default function Room() {
   const clock = useClockOffset(connected, connection.connectionCount);
   const [tab, setTab] = useState<Tab>('players');
   const [opening, setOpening] = useState(1);
+  const [openingSubmission, setOpeningSubmission] = useState(0);
   const [turnSeen, setTurnSeen] = useState('');
   const pending = useRef(false);
   const claim = useMutation(api.auction.claimSeat);
@@ -79,6 +80,10 @@ export default function Room() {
     pending.current = true;
     setBusy(true);
     setError('');
+    if ('type' in body && body.type === 'nominate') {
+      setOpening(body.amount);
+      setOpeningSubmission(value => value + 1);
+    }
     try {
       const result = endpoint === 'claim' && 'managerId' in body
         ? await claim({ managerId: body.managerId })
@@ -151,7 +156,8 @@ export default function Room() {
         <p className="me">{me.name}</p>
       </header>
       {error && <div className="toast" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss">×</button></div>}
-      <BlockPanel {...props} clockSample={clock.sample} opening={opening} setOpening={setOpening} />
+      <BlockPanel {...props} clockSample={clock.sample} opening={opening} setOpening={setOpening}
+        openingSubmission={openingSubmission} />
       <nav className="tabbar" role="tablist">
         {tabs.map(([value, label]) => (
           <button key={value} role="tab" aria-selected={tab === value} onClick={() => setTab(value)}>{label}</button>

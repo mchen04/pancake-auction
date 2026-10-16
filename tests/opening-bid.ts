@@ -228,6 +228,24 @@ async function main() {
             assert.equal(clamped.title,`Nominate at $${clamped.amount}`);
             return clamped;
         });
+        await check('Direct nomination normalizes focused text before a delayed query transition', async () => {
+            await browser('fill', 'input[aria-label="Opening bid"]', '5000');
+            const before = await evaluate<{ amount: string; cap: number }>(`({
+                amount:document.querySelector('input[aria-label="Opening bid"]').value,
+                cap:Number(document.querySelector('.nominate').title.replace(/[^0-9]/g,''))})`);
+            await evaluate('window.control.delay=2000;document.querySelector(".nominate").click();true');
+            await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');
+            const sending = await evaluate<{ amount: string; busy: boolean }>(`({
+                amount:document.querySelector('input[aria-label="Opening bid"]')?.value,
+                busy:document.querySelector('.nominate')?.disabled})`);
+            const state = await getState();
+            const price = state.lot?.highBid ?? state.sales[0]?.highBid;
+            await writeFile(`${evidence}/direct-submit.json`, JSON.stringify({ before, sending, price }));
+            assert.equal(before.amount, '5000'); assert.equal(sending.amount, String(before.cap));
+            assert(sending.busy); assert.equal(price, before.cap);
+            await sleep(2200); await evaluate('window.control.delay=0;true');
+            return { before, sending, price };
+        });
     } finally {
         try {
             await browser('close');

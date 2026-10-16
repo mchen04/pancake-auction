@@ -377,17 +377,17 @@ function BidControls(props: RoomProps & { player: Player | undefined; clockSampl
   );
 }
 
-function OpeningBid({ opening, setOpening, cap, turn }: {
-  opening: number; setOpening: (value: number) => void; cap: number; turn: number
+function OpeningBid({ opening, setOpening, cap, turn, submission }: {
+  opening: number; setOpening: (value: number) => void; cap: number; turn: number; submission: number
 }) {
-  const [edit, setEdit] = useState({ text: String(opening), focused: false, amount: opening, turn });
-  if (turn !== edit.turn || (!edit.focused && opening !== edit.amount)) {
-    setEdit({ text: String(opening), focused: edit.focused, amount: opening, turn });
+  const [edit, setEdit] = useState({ text: String(opening), focused: false, amount: opening, turn, submission });
+  if (turn !== edit.turn || submission !== edit.submission || (!edit.focused && opening !== edit.amount)) {
+    setEdit({ text: String(opening), focused: edit.focused, amount: opening, turn, submission });
   }
   function commit() {
     const amount = Math.max(1, Math.min(cap, Number(edit.text) || 1));
     setOpening(amount);
-    setEdit({ text: String(amount), focused: false, amount, turn });
+    setEdit({ text: String(amount), focused: false, amount, turn, submission });
   }
   return (
     <div className="opening">
@@ -399,7 +399,7 @@ function OpeningBid({ opening, setOpening, cap, turn }: {
         onBlur={commit}
         onChange={event => {
           const text = event.target.value.replace(/\D/g, '');
-          setEdit({ text, focused: true, amount: Number(text) || 1, turn });
+          setEdit({ text, focused: true, amount: Number(text) || 1, turn, submission });
           setOpening(Number(text) || 1);
         }} />
       <button className="secondary" aria-label="Raise opening bid" disabled={opening >= cap}
@@ -408,7 +408,9 @@ function OpeningBid({ opening, setOpening, cap, turn }: {
   );
 }
 
-function NominationView(props: RoomProps & { opening: number; setOpening: (value: number) => void }) {
+function NominationView(props: RoomProps & {
+  opening: number; setOpening: (value: number) => void; openingSubmission?: number
+}) {
   const { state, me, busy, send, opening, setOpening } = props;
   const d = state.draft;
   const myEntries = entriesOf(state, me.id);
@@ -441,7 +443,8 @@ function NominationView(props: RoomProps & { opening: number; setOpening: (value
       {mine ? (
         <>
           {d.status !== 'paused' && <p>{timeoutText(state, me)}</p>}
-          <OpeningBid opening={opening} setOpening={setOpening} cap={cap} turn={d.turnSequence ?? 0} />
+          <OpeningBid opening={opening} setOpening={setOpening} cap={cap} turn={d.turnSequence ?? 0}
+            submission={props.openingSubmission ?? 0} />
         </>
       ) : d.status !== 'paused' && (
         <p>{timeoutText(state, state.managers.find(manager => manager.id === d.nominatorId))}</p>
@@ -483,7 +486,7 @@ function LastWin(props: RoomProps) {
 }
 
 export function BlockPanel(props: RoomProps & {
-  clockSample: ClockAnchor | null; opening: number; setOpening: (value: number) => void
+  clockSample: ClockAnchor | null; opening: number; setOpening: (value: number) => void; openingSubmission?: number
 }) {
   const { state, clockSample } = props;
   const [detailsFor, setDetailsFor] = useState<number | null>(null);
