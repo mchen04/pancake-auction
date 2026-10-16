@@ -244,8 +244,27 @@ async function main() {
             return proof;
         });
         await check('Opening normalization occurs on blur for empty and over-cap edits', async () => {
-            await browser('fill', 'input[aria-label="Opening bid"]', '');
+            await evaluate(`window.openingEdits=[];
+                for(const type of ['focus','blur','input'])document.addEventListener(type,event=>{
+                    if(event.target.matches?.('input[aria-label="Opening bid"]'))window.openingEdits.push({
+                        type,at:performance.now(),value:event.target.value,trusted:event.isTrusted,
+                        inputType:event.inputType,focused:document.activeElement===event.target});
+                },true);true`);
+            await browser('focus', 'input[aria-label="Opening bid"]');
+            await browser('press', 'End');
+            await browser('press', 'Backspace');
             const empty = await evaluate<string>(`document.querySelector('input[aria-label="Opening bid"]').value`);
+            const transitions = await evaluate<number>('window.control.transitions');
+            const entry = (await getState()).roster.find(entry => entry.playerId === 'test-0')!;
+            await currentClient().act({ type: 'place', playerId: entry.playerId,
+                placement: entry.placement === 'active' ? 'taxi' : 'active' }, otherToken);
+            await until(`window.control.transitions>${transitions}`);
+            await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');
+            const refreshed = await evaluate<{ amount: string; focused: boolean; edits: {
+                type: string; at: number; value: string; trusted: boolean; inputType?: string; focused: boolean
+            }[] }>(`({amount:document.querySelector('input[aria-label="Opening bid"]').value,
+                focused:document.activeElement===document.querySelector('input[aria-label="Opening bid"]'),
+                edits:window.openingEdits})`);
             await browser('press', 'Tab');
             const normalized = await evaluate<string>(`document.querySelector('input[aria-label="Opening bid"]').value`);
             await browser('fill', 'input[aria-label="Opening bid"]', '5000');
@@ -254,10 +273,15 @@ async function main() {
             const clamped = await evaluate<{ amount: string; title: string }>(`({
                 amount:document.querySelector('input[aria-label="Opening bid"]').value,
                 title:document.querySelector('.nominate').title})`);
-            await writeFile(`${evidence}/normalize.json`, JSON.stringify({ empty, normalized, editing, clamped }));
-            assert.equal(empty, ''); assert.equal(normalized, '1'); assert.equal(editing, '5000');
+            await writeFile(`${evidence}/normalize.json`,
+                JSON.stringify({ empty, refreshed, normalized, editing, clamped }));
+            assert.equal(empty, ''); assert.equal(refreshed.amount, ''); assert(refreshed.focused);
+            assert(refreshed.edits.some(event => event.type === 'input' && event.trusted
+                && event.inputType === 'deleteContentBackward' && event.value === '' && event.focused));
+            assert(!refreshed.edits.some(event => event.type === 'blur'));
+            assert.equal(normalized, '1'); assert.equal(editing, '5000');
             assert(Number(clamped.amount) <= 1000); assert.equal(clamped.title, `Nominate at $${clamped.amount}`);
-            return { empty, normalized, editing, clamped };
+            return { empty, refreshed, normalized, editing, clamped };
         });
         await check('C28 the displayed opening is the clamped nomination amount', async () => {
             await browser('fill','input[aria-label="Opening bid"]','5000');
