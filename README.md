@@ -35,6 +35,8 @@ Set `EVIDENCE_DIR` outside the repository. The containment check resolves physic
 
 Each test command and simulation creates a fresh anonymous local Convex backend with its own ports, data directory, and private CLI configuration. The harness removes that state and stops its processes afterward. No existing deployment, credentials, or database is used. Tests fail if the backend cannot start. Fixtures replace all Sleeper requests in importer tests.
 
+Isolated backend setup has a 120-second total deadline after the existing 60-second lock wait. This covers bootstrap, readiness responses, function push, and the smoke query. `AUCTION_BACKEND_SETUP_TIMEOUT_MS` overrides it within 250–300,000 ms. Local cached starts normally take a few seconds; the default also allows the cold bootstrap download and retries. Timeout aborts setup requests, stops verified owned process groups with bounded escalation, checks listener closure, and releases the lock.
+
 Mini checks use `../tools/mini-run.sh <label> <command...>` from the app directory. Each invocation verifies a source manifest and uses its own remote source and dependency copy. The printed evidence path is `evidence/mini/<label>/<run-id>/artifacts/`. Use that path instead of label-only logs. The adjacent `retrieval.json` separates the remote execution exit from retrieval validation. Missing or mismatched evidence returns a non-zero exit. Successful retrieval removes that invocation's remote source; remote evidence and up to two lockfile-keyed dependency caches remain.
 
 Shutdown uses the CLI's graceful SIGINT path. Each close checks that both native listener ports are closed.

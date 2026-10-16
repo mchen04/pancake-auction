@@ -3,7 +3,7 @@ import {
     appendEvidenceFile as appendFile, copyEvidence as cp, makeEvidenceDirectory as mkdir,
     makeEvidenceTemporaryDirectory as mkdtemp, writeEvidenceFile as writeFile
 } from './evidence';
-import { ownCleanup, onceAsync, ownServer, listen } from './resources';
+import { ownCleanup, onceAsync, ownServer, listen, ownProcess, stopOwnedProcess } from './resources';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readFile, rm, symlink } from 'node:fs/promises';
 import { createConnection, createServer } from 'node:net';
@@ -82,30 +82,29 @@ async function startBackend(label: string, fixtures: boolean, directory: string,
     await symlink(cache, `${directory}/cli-home/.cache/convex`, 'dir');
     const { preparationLock } = await import('./preparation-lock');
     const releaseCache = await preparationLock(cache);
+    const setupMs = Math.max(250, Math.min(Number(process.env.AUCTION_BACKEND_SETUP_TIMEOUT_MS) || 120000, 300000));
+    const controller = new AbortController();
+    const expired = new Promise<never>((_, reject) => {
+        controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true });
+    });
+    const timer = setTimeout(() => controller.abort(new Error(`Isolated Convex setup timed out after ${setupMs} ms`)),
+        setupMs);
+    const withinSetup = <T>(work: Promise<T>) => Promise.race([work, expired]);
     const cli = resolve(repositoryDirectory, 'node_modules/convex/bin/main.js');
     const preload = resolve(repositoryDirectory, 'scripts/local-cli.mjs');
-    const bootstrap = spawn(process.execPath, ['--import', preload, '-e', '', '--', 'dev',
-        '--local-cloud-port', String(port), '--local-site-port', String(sitePort),
-        '--local-backend-version', isolatedBackendVersion],
-    { cwd: directory, env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
+    let bootstrap: ChildProcess | undefined;
     let child: ChildProcess | undefined;
     let log = '';
-    bootstrap.stdout.on('data', data => { log += String(data); });
-    bootstrap.stderr.on('data', data => { log += String(data); });
     const url = `http://127.0.0.1:${port}`;
-    const client = new ConvexHttpClient(url);
+    const client = new ConvexHttpClient(url, {
+        fetch: (input, init) => fetch(input, { ...init, signal: controller.signal })
+    });
     let push: ChildProcess | undefined;
     const close = onceAsync(async () => {
-        if (push?.pid) await stopProcess(push, 'SIGINT');
-        if (bootstrap.pid) await stopProcess(bootstrap, 'SIGTERM');
-        if (child?.pid) {
-            const native = child;
-            const force = setTimeout(() => {
-                if (native.exitCode === null && native.signalCode === null) native.kill('SIGKILL');
-            }, 2000);
-            try { await stopProcess(native, 'SIGTERM'); }
-            finally { clearTimeout(force); }
-        }
+        controller.abort(new Error('Isolated Convex setup stopped'));
+        if (push) await stopOwnedProcess(push);
+        if (bootstrap) await stopOwnedProcess(bootstrap);
+        if (child) await stopOwnedProcess(child);
         let nativePortsClosed = false;
         try {
             await Promise.all([requireClosedPort(port), requireClosedPort(sitePort)]);
@@ -118,19 +117,26 @@ async function startBackend(label: string, fixtures: boolean, directory: string,
         }
     });
     try {
-        const prepared = await new Promise((resolve, reject) => {
-            bootstrap.once('error', reject);
-            bootstrap.once('close', resolve);
-        });
+        bootstrap = ownProcess(spawn(process.execPath, ['--import', preload, '-e', '', '--', 'dev',
+            '--local-cloud-port', String(port), '--local-site-port', String(sitePort),
+            '--local-backend-version', isolatedBackendVersion],
+        { cwd: directory, env: environment, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }), 'SIGTERM', true);
+        bootstrap.stdout!.on('data', data => { log += String(data); });
+        bootstrap.stderr!.on('data', data => { log += String(data); });
+        const prepared = await withinSetup(new Promise((resolve, reject) => {
+            bootstrap!.once('error', reject);
+            bootstrap!.once('close', resolve);
+        }));
         if (prepared !== 0) throw new Error(`Cannot start pinned Convex backend ${isolatedBackendVersion}. `
             + `It must be cached or downloadable. Local preparation exited ${prepared}: ${log}`);
         const state = `${directory}/.convex/local/default`;
-        const configuration = JSON.parse(await readFile(`${state}/config.json`, 'utf8'));
+        const configuration = JSON.parse(await withinSetup(readFile(`${state}/config.json`, 'utf8')));
         const binary = resolve(cache, 'binaries', isolatedBackendVersion, 'convex-local-backend');
-        child = spawn(binary, ['--port', String(port), '--site-proxy-port', String(sitePort),
+        child = ownProcess(spawn(binary, ['--port', String(port), '--site-proxy-port', String(sitePort),
             '--instance-name', configuration.deploymentName, '--instance-secret', configuration.instanceSecret,
             '--local-storage', `${state}/convex_local_storage`, `${state}/convex_local_backend.sqlite3`],
-        { cwd: directory, env: { PATH: process.env.PATH, NODE_ENV: 'test' }, stdio: 'ignore' });
+        { cwd: directory, env: { PATH: process.env.PATH, NODE_ENV: 'test' }, detached: true,
+            stdio: 'ignore' }), 'SIGTERM', true);
         let startupError: Error | undefined;
         child.once('error', error => { startupError = new Error(`Cannot start the isolated local backend: ${error.message}`); });
         let ready = false;
@@ -140,28 +146,32 @@ async function startBackend(label: string, fixtures: boolean, directory: string,
             if (child.exitCode !== null) throw new Error(`Cannot start pinned Convex backend ${isolatedBackendVersion}. `
                 + `It must be cached or downloadable. Local Convex exited ${child.exitCode}: ${log}`);
             try {
-                const response = await fetch(`${url}/instance_name`);
+                const response = await withinSetup(fetch(`${url}/instance_name`, { signal: controller.signal }));
                 if (!response.ok) throw new Error('The local backend is not ready');
-                instanceName = await response.text();
+                instanceName = await withinSetup(response.text());
                 ready = true;
                 break;
-            } catch { await sleep(250); }
+            } catch {
+                if (controller.signal.aborted) throw controller.signal.reason;
+                await withinSetup(sleep(250));
+            }
         }
         if (!ready) throw new Error(`Local Convex did not start: ${log}`);
         if (instanceName !== configuration.deploymentName) throw new Error('Isolated Convex backend identity mismatch');
-        push = spawn(process.execPath, ['--import', preload, cli, 'dev', '--url', url,
+        push = ownProcess(spawn(process.execPath, ['--import', preload, cli, 'dev', '--url', url,
             '--admin-key', configuration.adminKey, '--once', '--typecheck', 'disable', '--codegen', 'disable',
-            '--tail-logs', 'disable'], { cwd: directory, env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
+            '--tail-logs', 'disable'], { cwd: directory, env: environment, detached: true,
+                stdio: ['ignore', 'pipe', 'pipe'] }), 'SIGINT', true);
         let pushLog = '';
         push.stdout!.on('data', data => { pushLog += String(data); });
         push.stderr!.on('data', data => { pushLog += String(data); });
-        const pushed = await new Promise((resolve, reject) => {
+        const pushed = await withinSetup(new Promise((resolve, reject) => {
             push!.once('error', error => reject(new Error(error.message.replaceAll(configuration.adminKey, '[local key]'))));
             push!.once('close', resolve);
-        });
+        }));
         log += pushLog.replaceAll(configuration.adminKey, '[local key]');
         if (pushed !== 0) throw new Error(`Isolated Convex function push failed: ${log}`);
-        await client.query(makeFunctionReference<'query'>('smoke:ping'), {});
+        await withinSetup(client.query(makeFunctionReference<'query'>('smoke:ping'), {}));
         const admin = async (name: string, args: Record<string, unknown> = {}) => {
             const argumentFile = `${directory}/args-${crypto.randomUUID()}.json`;
             await writeFile(argumentFile, JSON.stringify(args));
@@ -192,6 +202,7 @@ async function startBackend(label: string, fixtures: boolean, directory: string,
         await close();
         throw error;
     } finally {
+        clearTimeout(timer);
         await releaseCache();
     }
 }
