@@ -11,7 +11,7 @@ type WireAction = Infer<typeof actionValidator>;
 export class RuleError extends Error {
     constructor(message: string, public status = 422) { super(message); }
 }
-export const initialDraft = (): Draft => ({ status: 'setup', nominationGeneration: '',
+export const initialDraft = (): Draft => ({ status: 'setup', nominationGeneration: '', turnSequence: 0,
     phase: 'nomination', order: [], turnIndex: 0,
     nominatorId: null, lotId: null, deadline: null, remainingMs: null, nominationMs: 10000, biddingMs: 10000,
     extensionMs: 5000, capMs: 15000, passedTurns: [], completionReason: null });
@@ -36,6 +36,7 @@ export async function load(ctx: QueryCtx, token?: string, includePool = true, fu
     const managers = await ctx.db.query('managers').withIndex('id').collect();
     const hash = token && /^[a-f0-9]{64}$/.test(token) ? await tokenHash(token) : null;
     const draft: Draft = record ? { ...record.value,
+        turnSequence: record.turnSequence ?? record.value.turnSequence ?? 0,
         nominationGeneration: record.value.nominationGeneration ?? `${record._id}:0` } : initialDraft();
     const latest = await ctx.db.query('imports').order('desc').first();
     const pool = includePool && fullPool ? await ctx.db.query('pools').unique() : null;
@@ -66,14 +67,20 @@ export class Store {
     nextLot: number;
     nextEvent: number;
     nominationSequence: number;
+    turnSequence: number;
     constructor(public ctx: MutationCtx, public record: Doc<'drafts'>) {
         this.nextLot = record.nextLot;
         this.nextEvent = record.nextEvent;
         this.nominationSequence = record.nominationSequence ?? 0;
+        this.turnSequence = record.turnSequence ?? record.value.turnSequence ?? 0;
     }
     renewNomination(s: AuctionState) {
         this.nominationSequence++;
         s.draft.nominationGeneration = `${this.record._id}:${this.nominationSequence}`;
+    }
+    renewTurn(s: AuctionState) {
+        s.draft.turnSequence = ++this.turnSequence;
+        this.renewNomination(s);
     }
     async ensurePool(s: AuctionState) {
         s.players = (await this.ctx.db.query('pools').unique())?.players ?? [];
@@ -95,7 +102,8 @@ export class Store {
         }
         const version = this.record.version + 1;
         await this.ctx.db.patch(this.record._id, { value: s.draft, version,
-            nextLot: this.nextLot, nextEvent: this.nextEvent, nominationSequence: this.nominationSequence });
+            nextLot: this.nextLot, nextEvent: this.nextEvent, nominationSequence: this.nominationSequence,
+            turnSequence: this.turnSequence });
         if (s.draft.status === 'running' && s.draft.deadline !== null) {
             await this.ctx.scheduler.runAt(s.draft.deadline, internal.auction.expire,
                 { draftId: this.record._id, lotId: s.draft.lotId, version, deadline: s.draft.deadline });
@@ -170,7 +178,7 @@ async function turn(client: Store, s: AuctionState, from: number, now: number) {
         }
         d.turnIndex = index;
         d.nominatorId = m.id;
-        client.renewNomination(s);
+        client.renewTurn(s);
         if (d.status === "paused") {
             d.deadline = null;
             d.remainingMs = d.nominationMs;
@@ -414,7 +422,7 @@ export async function act(ctx: MutationCtx, action: WireAction, token: string) {
             d.lotId = null;
             d.deadline = null;
             d.remainingMs = d.nominationMs;
-            client.renewNomination(s);
+            client.renewTurn(s);
             await event(client, "undo", m.id, undone.id, {
                 playerId: undone.playerId,
                 winnerId: undone.highBidderId,

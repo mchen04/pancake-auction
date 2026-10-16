@@ -148,8 +148,79 @@ async function main() {
             assert.equal(shown.title,'Nominate at $1');assert.equal(shown.tab,'players');
             return {generation:state.draft.nominationGeneration,shown};
         });
+        await check('Opening edits keep key-by-key text and submit exactly thirty dollars', async () => {
+            await browser('fill', 'input[aria-label="Opening bid"]', '25');
+            await browser('focus', 'input[aria-label="Opening bid"]');
+            await browser('press', 'End');
+            await browser('press', 'Backspace');
+            await browser('press', 'Backspace');
+            await browser('press', '3');
+            await browser('press', '0');
+            const typed = await evaluate<string>(`document.querySelector('[aria-label="Opening bid"]').value`);
+            await evaluate('document.querySelector(".nominate").click();true');
+            for (let i = 0; i < 100; i++) { if ((await getState()).lot) break; await sleep(50); }
+            const actual = (await getState()).lot?.highBid;
+            await writeFile(`${evidence}/key-edit.json`, JSON.stringify({ typed, actual }));
+            assert.equal(typed, '30'); assert.equal(actual, 30);
+            return { typed, actual };
+        });
+        await check('Undo restores a new input turn while pause and resume retain the same turn', async () => {
+            let state = await getState();
+            assert(state.lot);
+            await currentClient().act({ type: 'force', lotId: state.lot.id,
+                expectedHighBidderId: state.lot.highBidderId, expectedHighBid: state.lot.highBid }, commissionerToken);
+            state = await getState();
+            await currentClient().act({ type: 'undo', lotId: state.sales[0].id }, commissionerToken);
+            await currentClient().act({ type: 'resume' }, commissionerToken);
+            await until(`document.querySelector('.headline').classList.contains('running')`);
+            await browser('fill', 'input[aria-label="Opening bid"]', '25');
+            await browser('click', '.tabbar button:nth-child(4)');
+            const before = await getState();
+            await currentClient().act({ type: 'pause' }, commissionerToken);
+            await until(`document.querySelector('.headline').classList.contains('paused')`);
+            await currentClient().act({ type: 'resume' }, commissionerToken);
+            await until(`document.querySelector('.headline').classList.contains('running')`);
+            const shown = await evaluate<{ amount: string; tab: string }>(`({
+                amount:document.querySelector('input[aria-label="Opening bid"]').value,
+                tab:document.querySelector('.room').dataset.tab})`);
+            await evaluate('document.querySelector(".nominate").click();true');
+            for (let i = 0; i < 100; i++) { if ((await getState()).lot) break; await sleep(50); }
+            const after = await getState();
+            const proof = { before: before.draft, after: after.draft, shown, actual: after.lot?.highBid };
+            await writeFile(`${evidence}/pause-turn.json`, JSON.stringify(proof, null, 2));
+            await currentClient().act({ type: 'force', lotId: after.lot!.id,
+                expectedHighBidderId: after.lot!.highBidderId, expectedHighBid: after.lot!.highBid }, commissionerToken);
+            await currentClient().act({ type: 'undo', lotId: after.lot!.id }, commissionerToken);
+            const undone = await getState();
+            await currentClient().act({ type: 'resume' }, commissionerToken);
+            await until(`document.querySelector('input[aria-label="Opening bid"]')?.value==='1'
+                &&document.querySelector('.room').dataset.tab==='players'`);
+            await until(`document.querySelector('.headline').classList.contains('running')`);
+            assert.notEqual(before.draft.nominationGeneration, after.draft.nominationGeneration);
+            assert.equal(before.draft.turnSequence, after.draft.turnSequence);
+            assert.notEqual(undone.draft.turnSequence, after.draft.turnSequence);
+            assert.equal(shown.amount, '25'); assert.equal(shown.tab, 'results'); assert.equal(after.lot?.highBid, 25);
+            return proof;
+        });
+        await check('Opening normalization occurs on blur for empty and over-cap edits', async () => {
+            await browser('fill', 'input[aria-label="Opening bid"]', '');
+            const empty = await evaluate<string>(`document.querySelector('input[aria-label="Opening bid"]').value`);
+            await browser('press', 'Tab');
+            const normalized = await evaluate<string>(`document.querySelector('input[aria-label="Opening bid"]').value`);
+            await browser('fill', 'input[aria-label="Opening bid"]', '5000');
+            const editing = await evaluate<string>(`document.querySelector('input[aria-label="Opening bid"]').value`);
+            await browser('press', 'Tab');
+            const clamped = await evaluate<{ amount: string; title: string }>(`({
+                amount:document.querySelector('input[aria-label="Opening bid"]').value,
+                title:document.querySelector('.nominate').title})`);
+            await writeFile(`${evidence}/normalize.json`, JSON.stringify({ empty, normalized, editing, clamped }));
+            assert.equal(empty, ''); assert.equal(normalized, '1'); assert.equal(editing, '5000');
+            assert(Number(clamped.amount) <= 1000); assert.equal(clamped.title, `Nominate at $${clamped.amount}`);
+            return { empty, normalized, editing, clamped };
+        });
         await check('C28 the displayed opening is the clamped nomination amount', async () => {
             await browser('fill','input[aria-label="Opening bid"]','5000');
+            await browser('press', 'Tab');
             const clamped=await evaluate<{amount:string;title:string}>(`({
                 amount:document.querySelector('input[aria-label="Opening bid"]').value,
                 title:document.querySelector('.nominate').title})`);

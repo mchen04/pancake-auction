@@ -193,7 +193,9 @@ function myNominationTurn(state: AuctionState, me: Manager) {
 }
 
 export function PoolPanel(props: RoomProps & { opening: number }) {
-  const { state, me, send, opening } = props;
+  const { state, me, send } = props;
+  const cap = Math.max(1, me.budget - Math.max(0, 19 - counts(entriesOf(state, me.id)).active));
+  const opening = Math.max(1, Math.min(cap, props.opening));
   const [search, setSearch] = useState('');
   const [position, setPosition] = useState('');
   const [sort, setSort] = useState('projection');
@@ -375,17 +377,30 @@ function BidControls(props: RoomProps & { player: Player | undefined; clockSampl
   );
 }
 
-function OpeningBid({ opening, setOpening, cap }: { opening: number; setOpening: (value: number) => void; cap: number }) {
+function OpeningBid({ opening, setOpening, cap, turn }: {
+  opening: number; setOpening: (value: number) => void; cap: number; turn: number
+}) {
+  const [edit, setEdit] = useState({ text: String(opening), focused: false, amount: opening, turn });
+  if (turn !== edit.turn || (!edit.focused && opening !== edit.amount)) {
+    setEdit({ text: String(opening), focused: edit.focused, amount: opening, turn });
+  }
+  function commit() {
+    const amount = Math.max(1, Math.min(cap, Number(edit.text) || 1));
+    setOpening(amount);
+    setEdit({ text: String(amount), focused: false, amount, turn });
+  }
   return (
     <div className="opening">
       <span>Open at</span>
       <button className="secondary" aria-label="Lower opening bid" disabled={opening <= 1}
         onClick={() => setOpening(Math.max(1, opening - 1))}>−</button>
-      <input aria-label="Opening bid" inputMode="numeric" value={String(opening)}
-        onFocus={event => event.target.select()}
+      <input aria-label="Opening bid" inputMode="numeric" value={edit.text}
+        onFocus={event => { setEdit(value => ({ ...value, focused: true })); event.target.select(); }}
+        onBlur={commit}
         onChange={event => {
-          const digits = event.target.value.replace(/\D/g, '');
-          setOpening(Math.max(1, Math.min(cap, Number(digits) || 1)));
+          const text = event.target.value.replace(/\D/g, '');
+          setEdit({ text, focused: true, amount: Number(text) || 1, turn });
+          setOpening(Number(text) || 1);
         }} />
       <button className="secondary" aria-label="Raise opening bid" disabled={opening >= cap}
         onClick={() => setOpening(Math.min(cap, opening + 1))}>+</button>
@@ -426,7 +441,7 @@ function NominationView(props: RoomProps & { opening: number; setOpening: (value
       {mine ? (
         <>
           {d.status !== 'paused' && <p>{timeoutText(state, me)}</p>}
-          <OpeningBid opening={opening} setOpening={setOpening} cap={cap} />
+          <OpeningBid opening={opening} setOpening={setOpening} cap={cap} turn={d.turnSequence ?? 0} />
         </>
       ) : d.status !== 'paused' && (
         <p>{timeoutText(state, state.managers.find(manager => manager.id === d.nominatorId))}</p>

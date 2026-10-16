@@ -34,6 +34,7 @@ export interface Manager {
 export interface Draft {
     status: "setup" | "running" | "paused" | "complete";
     nominationGeneration: string;
+    turnSequence?: number;
     phase: "nomination" | "bidding";
     order: number[];
     turnIndex: number;

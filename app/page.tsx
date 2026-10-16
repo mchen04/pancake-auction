@@ -127,8 +127,9 @@ export default function Room() {
     );
   }
   const d = state.draft;
-  const turnKey = d.status === 'running' && d.phase === 'nomination' && d.nominatorId === me.id
-    ? d.nominationGeneration : '';
+  const turnKey = (d.status === 'running' || d.status === 'paused')
+    && d.phase === 'nomination' && d.nominatorId === me.id
+    ? `${d.turnSequence ?? 0}` : '';
   if (turnKey && turnKey !== turnSeen) {
     setTurnSeen(turnKey);
     setTab('players');
@@ -141,7 +142,7 @@ export default function Room() {
         <h1 className="wordmark">Pancake Auction</h1>
         <p className={`headline ${state.draft.status}`}>{headline(state, me)}</p>
         {!connected && <p className="offline" role="status">Reconnecting…</p>}
-        {connected && (clock.status === 'syncing' || clock.status === 'retrying') && (
+        {(clock.status === 'syncing' || clock.status === 'retrying') && (
           <p className="offline clock-status" role="status">
             {clock.status === 'retrying' ? 'Clock not synced. Retrying…' : 'Syncing clock…'}
           </p>
