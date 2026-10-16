@@ -1,0 +1,12 @@
+[
+  { "name": "Michael", "commissioner": true },
+  { "name": "Matthew", "commissioner": false },
+  { "name": "Justin", "commissioner": false },
+  { "name": "Tianna", "commissioner": false },
+  { "name": "Kyle", "commissioner": false },
+  { "name": "Tyler", "commissioner": false },
+  { "name": "Jeremy", "commissioner": false },
+  { "name": "Jet", "commissioner": false },
+  { "name": "Petch", "commissioner": false },
+  { "name": "Zach", "commissioner": false }
+]

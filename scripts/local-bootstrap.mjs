@@ -1,0 +1,148 @@
+import { constants } from 'node:fs';
+import { access, chmod, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { hostname } from 'node:os';
+import { resolve } from 'node:path';
+import { promisify } from 'node:util';
+import { preparationLock } from './preparation-lock.ts';
+import { repositoryDirectory, makeEvidenceDirectory, writeEvidenceFile } from './evidence.ts';
+
+const execute = promisify(execFile);
+async function generatesKey(binary) {
+    const result = await execute(binary, ['keygen', 'admin-key', '--instance-name', 'anonymous-validation',
+        '--instance-secret', '0'.repeat(64)], { timeout: 5000 });
+    return Boolean(result.stdout.trim());
+}
+function inconclusiveValidation() {
+    return new Error('Could not validate cached backend; try again.');
+}
+async function validBinary(binary) {
+    let stat;
+    try { stat = await lstat(binary); }
+    catch (error) {
+        if (['ENOENT', 'ENOTDIR'].includes(error.code)) return false;
+        throw inconclusiveValidation();
+    }
+    if (!stat.isFile() || stat.size < 1024) return false;
+    try { await access(binary, constants.X_OK); }
+    catch (error) {
+        if (['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error.code)) return false;
+        throw inconclusiveValidation();
+    }
+    try { return await generatesKey(binary); }
+    catch (error) {
+        if (error.killed || error.signal) throw inconclusiveValidation();
+        if (typeof error.code === 'number' && error.code !== 0
+            || ['ENOENT', 'ENOTDIR', 'ENOEXEC', 'EACCES', 'EPERM'].includes(error.code)) return false;
+        throw inconclusiveValidation();
+    }
+}
+async function removeAbandonedDownloads(cache) {
+    for (const name of await readdir(cache)) {
+        if (!name.startsWith('download-')) continue;
+        const path = `${cache}/${name}`;
+        const stat = await lstat(path);
+        if (!stat.isDirectory()) continue;
+        const owner = await readFile(`${path}/owner.json`, 'utf8').then(JSON.parse).catch(() => null);
+        let abandoned = !owner && Date.now() - stat.mtimeMs >= 24 * 60 * 60 * 1000;
+        if (owner?.host === hostname() && Number.isInteger(owner.pid) && owner.pid > 0) {
+            try {
+                process.kill(owner.pid, 0);
+                const current = await execute('ps', ['-p', String(owner.pid), '-o', 'lstart=']).catch(() => null);
+                abandoned = Boolean(owner.processStart && current && current.stdout.trim() !== owner.processStart);
+            } catch (error) { abandoned = error.code === 'ESRCH'; }
+        }
+        if (abandoned) await rm(path, { recursive: true, force: true });
+    }
+}
+async function reuseConfiguration(path, version) {
+    let text;
+    try { text = await readFile(path, 'utf8'); }
+    catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    let value;
+    try { value = JSON.parse(text); } catch {}
+    const port = value => Number.isInteger(value) && value >= 0 && value <= 65535;
+    if (value && typeof value.deploymentName === 'string' && value.deploymentName.length > 0
+        && value.backendVersion === version && typeof value.instanceSecret === 'string'
+        && /^[a-f0-9]{64}$/.test(value.instanceSecret) && typeof value.adminKey === 'string' && value.adminKey.length > 0
+        && port(value.ports?.cloud) && port(value.ports?.site)) return true;
+    await rename(path, `${path}.invalid-${Date.now()}-${randomUUID()}`);
+    return false;
+}
+async function clearConfigurationTemps(state, version) {
+    for (const name of await readdir(state)) {
+        if (name.startsWith(`.config-${version}-`) && (await lstat(`${state}/${name}`)).isFile()) {
+            await rm(`${state}/${name}`);
+        }
+    }
+}
+async function publishConfiguration(state, configuration, version, value) {
+    const temporary = `${state}/.config-${version}-${randomUUID()}`;
+    try {
+        await writeFile(temporary, JSON.stringify(value), { flag: 'wx', mode: 0o600 });
+        const handle = await open(temporary, 'r+');
+        try { await handle.sync(); } finally { await handle.close(); }
+        await rename(temporary, configuration);
+    } finally { await rm(temporary, { force: true }); }
+}
+export async function preparePinnedDeployment(version) {
+    if (!/^[a-zA-Z0-9._-]+$/.test(version)) throw new Error('Invalid pinned backend version');
+    const project = process.cwd();
+    const localRuntime = project === repositoryDirectory;
+    const state = resolve(project, '.convex/local/default');
+    const configuration = `${state}/config.json`;
+    const cache = resolve(process.env.AUCTION_CLI_HOME, '.cache/convex/binaries', version);
+    const binary = `${cache}/convex-local-backend`;
+    await mkdir(cache, { recursive: true });
+    const release = await preparationLock(cache, { name: 'publish.lock' });
+    try {
+        await removeAbandonedDownloads(cache);
+        if (!await validBinary(binary)) {
+            await rm(binary, { force: true });
+            const platforms = { darwin: 'apple-darwin', linux: 'unknown-linux-gnu' };
+            const arches = { arm64: 'aarch64', x64: 'x86_64' };
+            const target = `${arches[process.arch]}-${platforms[process.platform]}`;
+            const temporary = await mkdtemp(`${cache}/download-`);
+            try {
+                await writeFile(`${temporary}/owner.json`, JSON.stringify({ host: hostname(), pid: process.pid,
+                    processStart: (await execute('ps', ['-p', String(process.pid), '-o', 'lstart='])).stdout.trim() }),
+                { flag: 'wx' });
+                if (!platforms[process.platform] || !arches[process.arch]) throw new Error('Unsupported local platform');
+                const archive = `convex-local-backend-${target}.zip`;
+                const response = await fetch(`https://github.com/get-convex/convex-backend/releases/download/${version}/${archive}`,
+                    { signal: AbortSignal.timeout(30000) });
+                if (!response.ok) throw new Error(`Binary download returned ${response.status}`);
+                await writeFile(`${temporary}/backend.zip`, new Uint8Array(await response.arrayBuffer()));
+                await execute('/usr/bin/unzip', ['-q', `${temporary}/backend.zip`, 'convex-local-backend', '-d', temporary]);
+                const extracted = `${temporary}/convex-local-backend`;
+                await chmod(extracted, 0o700);
+                if (!await validBinary(extracted)) throw new Error('Downloaded backend failed validation');
+                await rename(extracted, binary);
+            } catch {
+                throw new Error(`Pinned Convex backend ${version} is not cached and cannot be downloaded.`);
+            } finally { await rm(temporary, { recursive: true, force: true }); }
+        }
+        if (localRuntime) await mkdir(state, { recursive: true });
+        else await makeEvidenceDirectory(state, { recursive: true });
+        await clearConfigurationTemps(state, version);
+        if (await reuseConfiguration(configuration, version)) return;
+        const deploymentName = `anonymous-${randomUUID().replaceAll('-', '')}`;
+        const instanceSecret = randomBytes(32).toString('hex');
+        let adminKey;
+        try {
+            const result = await execute(binary, ['keygen', 'admin-key', '--instance-name', deploymentName,
+                '--instance-secret', instanceSecret]);
+            adminKey = result.stdout.trim();
+            if (!adminKey) throw new Error('Empty generated key');
+        } catch { throw new Error(`Pinned Convex backend ${version} cannot generate local credentials.`); }
+        const port = name => Number(process.argv[process.argv.indexOf(name) + 1]);
+        const value = { deploymentName, backendVersion: version, instanceSecret, adminKey,
+            ports: { cloud: port('--local-cloud-port'), site: port('--local-site-port') } };
+        if (localRuntime) {
+            await publishConfiguration(state, configuration, version, value);
+        } else {
+            await writeEvidenceFile(configuration, JSON.stringify(value));
+        }
+    } finally { await release(); }
+}
