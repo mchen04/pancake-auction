@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ConvexHttpClient } from 'convex/browser';
 import { Bot } from '../scripts/bot';
 import { Replay } from '../scripts/audit';
-import { assertFloors } from '../scripts/simulation-results';
+import { assertFloors, assertSeedVariation, draftFingerprint } from '../scripts/simulation-results';
 import { Strategy } from '../scripts/strategy';
 import { syntheticPool } from './support';
 import type { AuctionState } from '../lib/types';
@@ -26,6 +26,57 @@ function state(): AuctionState {
 }
 
 describe('competitive simulation', () => {
+    const sales = [
+        { type: 'sale', data: { playerId: 'test-0', managerId: 1, price: 10 } },
+        { type: 'sale', data: { playerId: 'test-1', managerId: 2, price: 20 } }
+    ];
+    it('accepts equal expiry counts with distinct sales and varied bid counts', () => {
+        const values = [
+            { seed: 1042, bids: 900, expirySales: 57, draftFingerprint: draftFingerprint(sales) },
+            { seed: 1043, bids: 910, expirySales: 57, draftFingerprint: draftFingerprint([...sales].reverse()) },
+            { seed: 1044, bids: 920, expirySales: 57, draftFingerprint: draftFingerprint([
+                sales[0], { ...sales[1], data: { ...sales[1].data, price: 21 } }
+            ]) }
+        ];
+        expect(() => assertSeedVariation(values)).not.toThrow();
+    });
+    it('rejects identical sale fingerprints despite varied bid counts', () => {
+        const fingerprint = draftFingerprint(sales);
+        expect(() => assertSeedVariation([
+            { seed: 1042, bids: 900, draftFingerprint: fingerprint },
+            { seed: 1043, bids: 910, draftFingerprint: fingerprint }
+        ])).toThrow('Different seeds must produce distinct sale sequences');
+    });
+    it('retains distinct-seed and accepted-bid variance controls', () => {
+        const values = [
+            { seed: 1042, bids: 900, draftFingerprint: draftFingerprint(sales) },
+            { seed: 1043, bids: 910, draftFingerprint: draftFingerprint([...sales].reverse()) }
+        ];
+        expect(() => assertSeedVariation(values.map(value => ({ ...value, seed: 1042 }))))
+            .toThrow('Spread requires distinct seeds');
+        expect(() => assertSeedVariation(values.map(value => ({ ...value, bids: 900 }))))
+            .toThrow('Accepted bid counts must vary across seeds');
+    });
+    it('fingerprints sales without timestamps, lot ids or unrelated events', () => {
+        const logged = sales.map((sale, index) => ({ ...sale, lot_id: index + 1,
+            data: { ...sale.data, now: index + 1000, deadline: index + 2000 } }));
+        expect(draftFingerprint([...logged, { type: 'pass', data: { managerId: 3 } }]))
+            .toBe(draftFingerprint(sales));
+    });
+    it.each([
+        ['player', [{ ...sales[0], data: { ...sales[0].data, playerId: 'test-2' } }, sales[1]]],
+        ['winner', [{ ...sales[0], data: { ...sales[0].data, managerId: 3 } }, sales[1]]],
+        ['price', [{ ...sales[0], data: { ...sales[0].data, price: 11 } }, sales[1]]],
+        ['order', [...sales].reverse()]
+    ])('changes the fingerprint when the sale %s changes', (_name, changed) => {
+        expect(draftFingerprint(changed)).not.toBe(draftFingerprint(sales));
+    });
+    it('rejects absent or malformed sales rather than hashing an empty draft', () => {
+        expect(() => draftFingerprint([{ type: 'bid', data: { amount: 10 } }]))
+            .toThrow('Draft fingerprint requires sales');
+        expect(() => draftFingerprint([{ type: 'sale', data: { playerId: 'test-0', price: 10 } }]))
+            .toThrow('Draft fingerprint requires a player, winner and price for every sale');
+    });
     it('counts stale control races as rejections and keeps missing bindings fatal', async () => {
         const bot = new Bot(1, 'http://127.0.0.1:9999');
         const mutation = vi.spyOn(ConvexHttpClient.prototype, 'mutation');
