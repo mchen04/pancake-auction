@@ -4,14 +4,26 @@ import { AuctionProvider } from '../app/provider';
 import Room from '../app/page';
 
 const host = window as unknown as { config: { url: string; proxyUrl: string; token: string; skew: number; disableTimeout: boolean };
-    clockNetwork: { nativeNow: () => number; responses: number; requests: number[]; offsets: number[]; accepted: unknown[]; freeze: () => void; wake: () => void } };
+    clockNetwork: { nativeNow: () => number; responses: number; requests: number[]; offsets: number[]; accepted: unknown[]; freeze: () => void; wake: () => void; disconnect: () => void; reconnect: () => void } };
 const nativeNow = Date.now.bind(Date);
 const nativeFetch = window.fetch.bind(window);
 const nativeMonotonic = performance.now.bind(performance);
 let pausedAt: number | null = null;
 let slept = 0;
 const accepted: unknown[] = [];
+const NativeSocket = window.WebSocket;
+const sockets: WebSocket[] = [];
+let disconnected = false;
+class NetworkSocket extends NativeSocket {
+    constructor(url: string | URL, protocols?: string | string[]) {
+        super(disconnected ? host.config.proxyUrl.replace('http:', 'ws:') : url, protocols);
+        sockets.push(this);
+    }
+}
+window.WebSocket = NetworkSocket;
 host.clockNetwork = { nativeNow, responses: 0, requests: [], offsets: [], accepted,
+    disconnect: () => { disconnected = true; for (const socket of sockets) socket.close(); },
+    reconnect: () => { disconnected = false; for (const socket of sockets) socket.close(); },
     freeze: () => { pausedAt = nativeMonotonic(); },
     wake: () => { if (pausedAt !== null) slept += nativeMonotonic() - pausedAt; pausedAt = null; } };
 Object.defineProperty(performance, 'now', { value: () => (pausedAt ?? nativeMonotonic()) - slept });

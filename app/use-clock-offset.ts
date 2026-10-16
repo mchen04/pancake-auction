@@ -13,7 +13,6 @@ export function useClockOffset(connected: boolean, connectionCount: number) {
     const continuity = useRef<{ wall: number; monotonic: number } | null>(null);
     const [clock, setClock] = useState<ClockState>({ sample: null, status: 'syncing' });
     useEffect(() => {
-        if (!connected) return;
         let cancelled = false;
         let synchronized = samples.hasSample;
         let pendingSamples = 0;
@@ -24,7 +23,7 @@ export function useClockOffset(connected: boolean, connectionCount: number) {
         const baseline = continuity.current ?? { wall: Date.now(), monotonic: performance.now() };
         continuity.current = baseline;
         async function sample() {
-            if (cancelled) return;
+            if (cancelled || !connected) return;
             const request = samples.begin();
             const controller = new AbortController();
             controllers.add(controller);
@@ -69,7 +68,7 @@ export function useClockOffset(connected: boolean, connectionCount: number) {
             }
         }
         function refresh(count = 1) {
-            if (cancelled) return;
+            if (cancelled || !connected) return;
             clearTimeout(timer);
             pendingSamples = Math.max(pendingSamples, count);
             if (!sampling) void drain();
@@ -87,6 +86,10 @@ export function useClockOffset(connected: boolean, connectionCount: number) {
                 for (const controller of controllers) controller.abort();
                 return 2;
             }
+            if (divergence < -1000) {
+                baseline.wall = wall;
+                baseline.monotonic = monotonic;
+            }
             return 0;
         }
         const wake = () => refresh(checkContinuity() || 1);
@@ -95,7 +98,7 @@ export function useClockOffset(connected: boolean, connectionCount: number) {
             const count = checkContinuity();
             if (count) refresh(count);
         }, 1000);
-        samples.reset(true);
+        if (connected) samples.reset(true);
         checkContinuity();
         refresh(3);
         window.addEventListener('focus', wake);

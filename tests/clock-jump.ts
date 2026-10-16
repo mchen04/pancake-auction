@@ -21,6 +21,8 @@ async function browser(...args: string[]) {
 }
 async function evaluate<T>(expression: string): Promise<T> { return JSON.parse(await browser('eval', expression)); }
 async function check(name: string, run: () => Promise<unknown>) {
+    const items = process.argv.find(arg => arg.startsWith('--items='))?.slice(8).split(',');
+    if (items && !items.some(item => name.startsWith(item))) return;
     try { const proof = await run(); results.push({ name, result: 'passed', proof }); console.log(`PASS ${name}`); }
     catch (error) { results.push({ name, result: 'failed', error: String(error) }); console.log(`FAIL ${name}: ${error}`); }
 }
@@ -131,12 +133,14 @@ async function main() {
                 blocked = true;
                 await evaluate(`window.config.skew=${jump}`);
                 const jumped = await ticks();
-                await evaluate('window.config.skew=0');
+                blocked = false; delayMs = 0;
+                await evaluate('window.config.skew=0;window.dispatchEvent(new Event("focus"));true');
+                await synchronized();
                 const reversed = await ticks(700);
                 await writeFile(`${evidence}/jump-${jump}.json`, JSON.stringify({ before,jumped,reversed },null,2));
                 accurate(jumped); accurate(reversed);
                 assert.equal(jumped.responsesBefore,jumped.responsesAfter);
-                assert.equal(before.responsesAfter,reversed.responsesAfter,'No resample hides a clock jump');
+                assert.equal(before.responsesAfter,jumped.responsesAfter,'No resample hides a backward clock jump');
                 await browser('screenshot',`${evidence}/jump-${jump}.png`);
                 return { before,jumped,reversed,toleranceSeconds:0.3 };
             });
@@ -223,6 +227,45 @@ async function main() {
             await writeFile(`${evidence}/heartbeat-wake.json`,JSON.stringify(observed));
             assert.equal(observed.shown,'--');assert.equal(observed.status,'retrying');assert(observed.connected);
             return observed;
+        });
+        await check('Disconnected sleep marks the clock uncertain before reconnect and a valid sample', async () => {
+            await open(0); await synchronized(); blocked = true;
+            await evaluate('window.clockNetwork.disconnect();true');
+            for (let i = 0; i < 100; i++) {
+                if (await evaluate<boolean>(`document.body.textContent.includes('Reconnecting…')`)) break;
+                await sleep(25);
+            }
+            assert(await evaluate<boolean>(`document.body.textContent.includes('Reconnecting…')`));
+            await evaluate('window.clockNetwork.freeze();true'); await sleep(1800);
+            await evaluate('window.clockNetwork.wake();true'); await sleep(1100);
+            const observed = await evaluate<{ shown: string; message: string; disconnected: boolean }>(`({
+                shown:document.querySelector('.shot-clock .digits').textContent,
+                message:document.querySelector('.clock-status')?.textContent??'',
+                disconnected:document.body.textContent.includes('Reconnecting…')})`);
+            await writeFile(`${evidence}/disconnected-sleep.json`, JSON.stringify(observed));
+            assert.equal(observed.shown, '--'); assert(observed.disconnected);
+            assert.equal(observed.message, 'Clock not synced. Retrying…');
+            blocked = false; delayMs = 0;
+            await configure({ deadlineAfterMs: 9000 });
+            await evaluate('window.clockNetwork.reconnect();true');
+            await synchronized(); const recovered = await ticks(600); accurate(recovered);
+            return { observed, recovered };
+        });
+        await check('Backward wall correction cannot mask a later five-second sleep', async () => {
+            await open(0); await synchronized(); blocked = true;
+            await evaluate('window.config.skew=-30000;true');
+            const backward = await ticks(1100); accurate(backward);
+            await evaluate('window.clockNetwork.freeze();true'); await sleep(5000);
+            await evaluate('window.clockNetwork.wake();true'); await sleep(1100);
+            const observed = await evaluate<{ shown: string; message: string }>(`({
+                shown:document.querySelector('.shot-clock .digits').textContent,
+                message:document.querySelector('.clock-status')?.textContent??''})`);
+            await writeFile(`${evidence}/backward-sleep.json`, JSON.stringify({ backward, observed }));
+            assert.equal(observed.shown, '--'); assert.equal(observed.message, 'Clock not synced. Retrying…');
+            blocked = false; delayMs = 0;
+            await configure({ deadlineAfterMs: 9000 }); await synchronized();
+            const recovered = await ticks(500); accurate(recovered);
+            return { backward, observed, recovered };
         });
         await check('Lifecycle returns keep the countdown visible and cannot starve fresh samples', async () => {
             await open(0); await synchronized();
