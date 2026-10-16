@@ -128,7 +128,7 @@ export default function Room() {
   }
   const d = state.draft;
   const turnKey = d.status === 'running' && d.phase === 'nomination' && d.nominatorId === me.id
-    ? `${d.turnIndex}-${state.recentEvents.find(event => event.type === 'turn')?.id ?? ''}` : '';
+    ? d.nominationGeneration : '';
   if (turnKey && turnKey !== turnSeen) {
     setTurnSeen(turnKey);
     setTab('players');

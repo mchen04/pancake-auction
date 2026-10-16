@@ -376,19 +376,16 @@ function BidControls(props: RoomProps & { player: Player | undefined; clockSampl
 }
 
 function OpeningBid({ opening, setOpening, cap }: { opening: number; setOpening: (value: number) => void; cap: number }) {
-  const [text, setText] = useState<string | null>(null);
   return (
     <div className="opening">
       <span>Open at</span>
       <button className="secondary" aria-label="Lower opening bid" disabled={opening <= 1}
         onClick={() => setOpening(Math.max(1, opening - 1))}>−</button>
-      <input aria-label="Opening bid" inputMode="numeric" value={text ?? String(opening)}
-        onFocus={event => { setText(String(opening)); event.target.select(); }}
-        onBlur={() => setText(null)}
+      <input aria-label="Opening bid" inputMode="numeric" value={String(opening)}
+        onFocus={event => event.target.select()}
         onChange={event => {
           const digits = event.target.value.replace(/\D/g, '');
-          setText(digits);
-          if (digits) setOpening(Math.max(1, Math.min(cap, Number(digits))));
+          setOpening(Math.max(1, Math.min(cap, Number(digits) || 1)));
         }} />
       <button className="secondary" aria-label="Raise opening bid" disabled={opening >= cap}
         onClick={() => setOpening(Math.min(cap, opening + 1))}>+</button>

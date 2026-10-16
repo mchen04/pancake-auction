@@ -11,7 +11,7 @@ const host = window as unknown as { initial: AuctionState; config: { token: stri
     replace: (change: Partial<AuctionState>) => void; actions: Action[]; control: typeof control };
 const nativeNow = Date.now.bind(Date);
 const nativeFetch = window.fetch.bind(window);
-const control = { delay: 0, requests: {} as Record<number, string>,
+const control = { sockets: [] as WebSocket[], transitions: 0, delay: 0, requests: {} as Record<number, string>,
     events: [] as { type: string; path?: string; at: number; serverNow?: number }[], nativeNow };
 host.control = control;
 host.actions = [];
@@ -43,6 +43,7 @@ class OrderedSocket extends EventTarget {
     constructor(url: string | URL, protocols?: string | string[]) {
         super();
         this.socket = new NativeSocket(url, protocols);
+        control.sockets.push(this.socket);
         this.socket.onopen = event => { this.readyState = 1; this.onopen?.(event); };
         this.socket.onclose = event => { this.readyState = 3; this.onclose?.(event); };
         this.socket.onerror = event => this.onerror?.(event);
@@ -50,6 +51,7 @@ class OrderedSocket extends EventTarget {
             const data: Message = JSON.parse(event.data);
             const path = control.requests[data.requestId];
             const deliver = () => {
+                if (data.type === 'Transition') control.transitions++;
                 if (data.type === 'MutationResponse') control.events.push({ type: 'delivered', path,
                     at: nativeNow(), serverNow: data.result?.serverNow });
                 this.onmessage?.(event);
