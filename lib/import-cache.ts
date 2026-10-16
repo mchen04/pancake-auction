@@ -1,4 +1,5 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { evidenceFile, writeEvidenceFile } from '../scripts/evidence';
 
 export interface Snapshot {
     fetchedAt: string;
@@ -6,6 +7,7 @@ export interface Snapshot {
 }
 
 export async function readSnapshot(path: string, now = Date.now()): Promise<Snapshot | null> {
+    path = evidenceFile(path);
     try {
         const snapshot = JSON.parse(await readFile(path, 'utf8')) as Snapshot;
         const age = now - Date.parse(snapshot.fetchedAt);
@@ -16,5 +18,5 @@ export async function readSnapshot(path: string, now = Date.now()): Promise<Snap
 }
 
 export async function writeSnapshot(path: string, snapshot: Snapshot) {
-    await writeFile(path, JSON.stringify(snapshot));
+    await writeEvidenceFile(path, JSON.stringify(snapshot));
 }

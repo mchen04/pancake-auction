@@ -1,6 +1,8 @@
+import { makeEvidenceDirectory as mkdir, writeEvidenceFile as writeFile, bundleEvidence } from '../scripts/evidence';
+import { withResources, runBrowser, ownClient, ownServer, listen } from '../scripts/resources';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
@@ -19,7 +21,7 @@ const { build }: typeof import('esbuild') = require('esbuild');
 const session = `pancake-websocket-${crypto.randomUUID()}`;
 const interfere = makeFunctionReference<'mutation'>('testOnly:interfereDraft');
 async function browser(...args: string[]) {
-    return (await execute('agent-browser', ['--session', session, ...args], { timeout: 25000 })).stdout.trim();
+    return runBrowser(session,args,25000);
 }
 async function evaluate(expression: string) { return JSON.parse(await browser('eval', expression)); }
 async function until(expression: string, timeoutMs = 20000) {
@@ -44,21 +46,21 @@ function requireRuleResult(result: MutationResult) {
 async function main() {
     const directory = `${process.env.EVIDENCE_DIR}/websocket`;
     await mkdir(directory, { recursive: true });
-    await build({ entryPoints: ['tests/websocket-harness.tsx'], outfile: `${directory}/bundle.js`, bundle: true,
+    await bundleEvidence(build, { entryPoints: ['tests/websocket-harness.tsx'], outfile: `${directory}/bundle.js`, bundle: true,
         platform: 'browser', format: 'iife', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' } });
     const backend = await localBackend('websocket-retry', true);
     const http = new AuctionClient(backend.url);
     const disconnects: string[] = [];
-    const bidders = Array.from({ length: 8 }, () => new ConvexReactClient(backend.url,
-        { logger: false, unsavedChangesWarning: false, onServerDisconnectError: message => disconnects.push(message) }));
-    const writers = Array.from({ length: 4 }, () => new ConvexReactClient(backend.url,
-        { logger: false, unsavedChangesWarning: false }));
+    const bidders = Array.from({ length: 8 }, () => ownClient(new ConvexReactClient(backend.url,
+        { logger: false, unsavedChangesWarning: false, onServerDisconnectError: message => disconnects.push(message) })));
+    const writers = Array.from({ length: 4 }, () => ownClient(new ConvexReactClient(backend.url,
+        { logger: false, unsavedChangesWarning: false })));
     const proof: Record<string, unknown> = { backend: backend.identity, browserTransport: 'native WebSocket',
         httpTransport: 'ConvexHttpClient', adapterUsed: false };
     let stopContention: (() => Promise<void>) | undefined;
     let base = '';
     let token = '';
-    const server = createServer(async (request, response) => {
+    const server = ownServer(createServer(async (request, response) => {
         if (request.url === '/bundle.js') {
             response.setHeader('Content-Type', 'text/javascript');
             response.end(await readFile(`${directory}/bundle.js`));
@@ -68,7 +70,7 @@ async function main() {
         } else response.end('<!doctype html><html><head><link rel="stylesheet" href="/style.css"></head>'
             + '<body><div id="root"></div><script>window.roomConfig='
             + JSON.stringify({ url: backend.url, token }) + '</script><script src="/bundle.js"></script></body></html>');
-    });
+    }));
     async function churn() {
         let active = true;
         let commits = 0;
@@ -109,7 +111,7 @@ async function main() {
         let state = await http.state();
         await http.act({ type: 'nominate', playerId: state.players[0].id, amount: 1,
             nominationGeneration: state.draft.nominationGeneration }, tokens[state.draft.nominatorId! - 1]);
-        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+        await listen(server, 0, '127.0.0.1');
         const address = server.address();
         assert(address && typeof address !== 'string');
         base = `http://127.0.0.1:${address.port}`;
@@ -251,4 +253,4 @@ async function main() {
         }
     }
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+withResources(main).catch(error => { console.error(error); process.exitCode = 1; });

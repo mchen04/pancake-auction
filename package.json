@@ -16,12 +16,12 @@
     "sim": "tsx scripts/sim.ts",
     "verify": "tsx scripts/verify.ts",
     "league:check": "tsx scripts/cli.ts check",
-    "test:ui": "tsx tests/ui.ts && tsx tests/preference.ts && tsx tests/connection.ts && tsx tests/turn-client.ts && tsx tests/clock-network.ts && tsx tests/roster-slots.ts",
+    "test:ui": "tsx tests/ui.ts && tsx tests/preference.ts && tsx tests/connection.ts && tsx tests/turn-client.ts && tsx tests/clock-network.ts && tsx tests/roster-slots.ts && tsx tests/clock-jump.ts",
     "test:volume": "tsx tests/pool-volume.ts",
     "test:room": "tsx tests/ui-import.ts",
     "test:layout": "tsx tests/layout.ts",
     "backend:local": "tsx scripts/local-dev.ts",
-    "test:local": "tsx tests/local-dev.ts"
+    "test:local": "tsx tests/local-dev.ts && tsx tests/setup-cleanup.ts"
   },
   "dependencies": {
     "convex": "^1.46.0",

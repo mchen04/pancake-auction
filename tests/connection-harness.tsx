@@ -2,7 +2,6 @@ import { createRoot } from 'react-dom/client';
 import { useEffect, useState } from 'react';
 import { useQuery } from 'convex/react';
 import { AuctionProvider } from '../app/provider';
-import { ShotClock } from '../app/components';
 import { api } from '../convex/_generated/api';
 import Room from '../app/page';
 
@@ -95,7 +94,11 @@ function CachedClockControl() {
     const snapshot = useQuery(api.auction.state, { token: config.token });
     const [offset, setOffset] = useState(0);
     useEffect(() => { if (snapshot) setOffset(snapshot.serverNow - Date.now()); }, [snapshot]);
-    return snapshot && <div className="legacy-clock"><ShotClock draft={snapshot.draft} offset={offset} /></div>;
+    const [now, setNow] = useState(Date.now);
+    useEffect(() => { const timer=setInterval(()=>setNow(Date.now()),100); return ()=>clearInterval(timer); },[]);
+    const remaining = snapshot ? Math.max(0,(snapshot.draft.deadline ?? now)-now-offset)/1000 : 0;
+    return snapshot && <div className="legacy-clock"><span className="digits">
+        {remaining>=10?Math.ceil(remaining):remaining.toFixed(1)}</span></div>;
 }
 createRoot(document.getElementById('root')!).render(<AuctionProvider url={config.url}>
     <Room />{mode === 'stale' && <CachedClockControl />}

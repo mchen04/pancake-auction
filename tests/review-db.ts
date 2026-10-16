@@ -1,5 +1,6 @@
+import { makeEvidenceDirectory as mkdir, writeEvidenceFile as writeFile } from '../scripts/evidence';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+
 import { act, claimSeat, getState, RuleError } from './support';
 import { counts } from '../lib/rules';
 import { safeError } from '../scripts/env';

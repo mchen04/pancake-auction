@@ -1,5 +1,6 @@
+import { makeEvidenceDirectory as mkdir, writeEvidenceFile as writeFile } from '../scripts/evidence';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+
 import { makeFunctionReference } from 'convex/server';
 import { api } from '../convex/_generated/api';
 import { AuctionClient } from '../lib/client';

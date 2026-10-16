@@ -1,5 +1,8 @@
+import {
+    appendEvidenceFile as appendFile, makeEvidenceDirectory as mkdir, makeEvidenceTemporaryDirectory as mkdtemp, setEvidenceTimes as utimes
+} from '../scripts/evidence';
 import { spawnSync } from 'node:child_process';
-import { appendFile, mkdir, mkdtemp, readFile, rm, stat, utimes } from 'node:fs/promises';
+import { readFile, rm, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 

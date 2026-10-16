@@ -1,5 +1,9 @@
+import {
+    appendEvidenceFile as appendFile, copyEvidence as cp, makeEvidenceDirectory as mkdir,
+    makeEvidenceTemporaryDirectory as mkdtemp, writeEvidenceFile as writeFile
+} from '../scripts/evidence';
 import { spawnSync } from 'node:child_process';
-import { access, appendFile, cp, mkdir, mkdtemp, readFile, readdir, rm, symlink } from 'node:fs/promises';
+import { access, readFile, readdir, rm, symlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { evidenceDirectory } from '../scripts/evidence';
@@ -57,7 +61,8 @@ async function fileCount(directory: string): Promise<number> {
 async function privateSource(parent: string) {
     const source = `${parent}/source`;
     const files = [
-        'package.json', 'scripts/import.ts', 'scripts/evidence.ts', 'scripts/env.ts', 'scripts/admin-client.ts', 'scripts/local-cli.mjs',
+        'package.json', 'scripts/evidence-cli.mjs', 'scripts/import.ts', 'scripts/evidence.ts',
+        'scripts/env.ts', 'scripts/admin-client.ts', 'scripts/local-cli.mjs',
         'lib/import-data.ts', 'lib/import-cache.ts', 'lib/rules.ts', 'lib/types.ts',
         'tests/import-fetch.mjs', 'tests/import-fixture.ts', 'tests/fixtures/sleeper.json'
     ];
@@ -195,4 +200,103 @@ describe('C23 source boundary ignores the caller working directory', () => {
             }
         }, 20000
     );
+});
+
+describe('C25 actual importer checks every output target', () => {
+    it.each(['direct-root','child-link','final-snapshot-link','final-cache-link','external','sibling-child-link'])(
+        'rejects source writes through %s', async kind => {
+            await mkdir(root, { recursive: true });
+            const parent = await mkdtemp(`${root}/write-target-`);
+            const proof: Record<string, unknown> = { kind };
+            try {
+                const source = await privateSource(parent);
+                const outside = `${parent}/outside`;
+                const cache = `${source}/existing-cache`;
+                const marker = `${source}/existing.json`;
+                await mkdir(cache);
+                await mkdir(`${outside}/import`, { recursive: true });
+                const original = '{"untouched":true}\n';
+                await writeFile(marker, original);
+                if (kind === 'child-link' || kind === 'sibling-child-link') {
+                    await rm(`${outside}/import`, { recursive: true });
+                    await symlink(cache, `${outside}/import`, 'dir');
+                }
+                if (kind.startsWith('final-')) {
+                    const name = kind === 'final-cache-link' ? 'source-14.json' : 'sleeper-2026.json';
+                    await symlink(marker, `${outside}/import/${name}`, 'file');
+                }
+                const fetchLog = `${parent}/fetch.jsonl`;
+                const before = await fileCount(source);
+                const { createHash } = await import('node:crypto');
+                const hash = (value: string) => createHash('sha256').update(value).digest('hex');
+                const result = spawnSync(process.execPath, [
+                    '--import', `${source}/node_modules/tsx/dist/loader.mjs`,
+                    '--import', `${source}/tests/import-fetch.mjs`, `${source}/scripts/import.ts`
+                ], { cwd: kind === 'sibling-child-link' ? parent : source, encoding: 'utf8', timeout: 15000,
+                    env: { PATH: process.env.PATH, NODE_ENV: 'test', EVIDENCE_DIR: kind === 'direct-root' ? source : outside,
+                        IMPORT_TEST_FETCH_LOG: fetchLog, IMPORT_TEST_NOW: String(Date.UTC(2026, 9, 1)) } });
+                const fetched = (await readFile(fetchLog, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean);
+                const after = await fileCount(source);
+                const current = await readFile(marker, 'utf8');
+                Object.assign(proof, { exitCode: result.status, fetched: fetched.length,
+                    sourceFilesBefore: before, sourceFilesAfter: after, markerBefore: hash(original),
+                    markerAfter: hash(current), stdout: result.stdout, stderr: result.stderr });
+                expect.soft(after).toBe(before);
+                expect.soft(hash(current)).toBe(hash(original));
+                if (kind === 'external') {
+                    expect(result.status).toBe(0);
+                    expect(fetched).toHaveLength(15);
+                    expect(await fileCount(`${outside}/import`)).toBe(16);
+                } else {
+                    expect.soft(result.status).toBe(1);
+                    expect.soft(result.stderr).toMatch(/outside the repository|symbolic link/i);
+                    expect(fetched).toHaveLength(0);
+                }
+            } finally {
+                await rm(parent, { recursive: true, force: true });
+                proof.temporaryTreeRemoved = await access(parent).then(() => false, () => true);
+                await appendFile(`${root}/write-target-cases.jsonl`, JSON.stringify(proof) + '\n');
+            }
+        }, 20000
+    );
+});
+
+describe('C25 command logs use the shared output guard', () => {
+    it.each(['child-link','file-link','external'])('actual capture command: %s', async kind => {
+        await mkdir(root,{recursive:true});
+        const parent=await mkdtemp(`${root}/command-`);
+        const proof: Record<string,unknown>={kind};
+        try {
+            const source=await privateSource(parent), outside=`${parent}/outside`;
+            await mkdir(outside);
+            const marker=`${source}/protected.json`, original='{"preserved":true}';
+            await writeFile(marker,original);
+            if(kind==='child-link')await symlink(source,`${outside}/child`,'dir');
+            if(kind==='file-link')await symlink(marker,`${outside}/capture.log`,'file');
+            const output=kind==='child-link'?'child/capture.log':'capture.log';
+            const executed=`${parent}/executed`;
+            const script=`require('node:fs').writeFileSync(${JSON.stringify(executed)},'ran');console.log('recorded')`;
+            const before=await fileCount(source);
+            const run=spawnSync(process.execPath,[`${source}/scripts/evidence-cli.mjs`,outside,'--capture',output,
+                process.execPath,'-e',script],{cwd:parent,encoding:'utf8',timeout:10000,env:{PATH:process.env.PATH,NODE_ENV:'test'}});
+            const after=await fileCount(source);
+            Object.assign(proof,{exitCode:run.status,sourceFilesBefore:before,sourceFilesAfter:after,
+                markerUnchanged:await readFile(marker,'utf8')===original,
+                executed:await access(executed).then(()=>true,()=>false),stderr:run.stderr});
+            expect(after).toBe(before);
+            expect(proof.markerUnchanged).toBe(true);
+            if(kind==='external') {
+                expect(run.status).toBe(0);
+                expect(proof.executed).toBe(true);
+                expect(await readFile(`${outside}/capture.log`,'utf8')).toBe('recorded\n');
+            } else {
+                expect(run.status).toBe(1);
+                expect(proof.executed).toBe(false);
+                expect(run.stderr).toMatch(/outside the repository|symbolic link/i);
+            }
+        } finally {
+            await rm(parent,{recursive:true,force:true});
+            await appendFile(`${root}/cli-write-cases.jsonl`,JSON.stringify(proof)+'\n');
+        }
+    },15000);
 });

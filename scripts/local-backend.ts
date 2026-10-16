@@ -1,5 +1,11 @@
+import { mkdir as mkdirCache } from 'node:fs/promises';
+import {
+    appendEvidenceFile as appendFile, copyEvidence as cp, makeEvidenceDirectory as mkdir,
+    makeEvidenceTemporaryDirectory as mkdtemp, writeEvidenceFile as writeFile
+} from './evidence';
+import { ownCleanup, onceAsync, ownServer, listen } from './resources';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { appendFile, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { readFile, rm, symlink } from 'node:fs/promises';
 import { createConnection, createServer } from 'node:net';
 import { resolve } from 'node:path';
 import { ConvexHttpClient } from 'convex/browser';
@@ -11,7 +17,7 @@ async function cacheLock(cache: string) {
     const path = `${cache}/prepare.lock`;
     for (let attempt = 0; attempt < 600; attempt++) {
         try {
-            await mkdir(path);
+            await mkdirCache(path);
             return () => rm(path, { recursive: true, force: true });
         } catch (error) {
             if (!(error instanceof Error) || !('code' in error) || error.code !== 'EEXIST') throw error;
@@ -21,8 +27,8 @@ async function cacheLock(cache: string) {
     throw new Error('Local Convex binary preparation is busy');
 }
 export async function freePort(): Promise<number> {
-    const server = createServer();
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const server = ownServer(createServer());
+    await listen(server);
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('No local port');
     await new Promise<void>(resolve => server.close(() => resolve()));
@@ -60,7 +66,9 @@ export async function localBackend(label: string, fixtures = false) {
     await mkdir(evidence, { recursive: true });
     const directory = await mkdtemp(`${evidence}/backend-${label}-`);
     try {
-        return await startBackend(label, fixtures, directory, evidence);
+        const backend = await startBackend(label, fixtures, directory, evidence);
+        ownCleanup(backend.close);
+        return backend;
     } catch (error) {
         await rm(directory, { recursive: true, force: true });
         throw error;
@@ -82,7 +90,7 @@ async function startBackend(label: string, fixtures: boolean, directory: string,
     await mkdir(`${directory}/tmp`);
     await mkdir(`${directory}/cli-home/.cache`);
     const cache = resolve(repositoryDirectory, '.convex/backend-binary-cache');
-    await mkdir(cache, { recursive: true });
+    await mkdirCache(cache, { recursive: true });
     await symlink(cache, `${directory}/cli-home/.cache/convex`, 'dir');
     const releaseCache = await cacheLock(cache);
     const cli = resolve(repositoryDirectory, 'node_modules/convex/bin/main.js');
@@ -95,7 +103,7 @@ async function startBackend(label: string, fixtures: boolean, directory: string,
     child.stderr.on('data', data => { log += String(data); });
     const url = `http://127.0.0.1:${port}`;
     const client = new ConvexHttpClient(url);
-    const close = async () => {
+    const close = onceAsync(async () => {
         await stopProcess(child, 'SIGINT');
         let nativePortsClosed = false;
         try {
@@ -107,7 +115,7 @@ async function startBackend(label: string, fixtures: boolean, directory: string,
             await appendFile(`${evidence}/local-backends.jsonl`, JSON.stringify({ label, action: 'close',
                 pid: child.pid, port, sitePort, directoryRemoved: true, nativePortsClosed }) + '\n');
         }
-    };
+    });
     try {
         let ready = false;
         for (let attempt = 0; attempt < 600; attempt++) {

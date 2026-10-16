@@ -1,6 +1,8 @@
+import { writeEvidenceFile as writeFile, bundleEvidence } from '../scripts/evidence';
+import { withResources, runBrowser, ownServer, listen } from '../scripts/resources';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { createServer as httpServer } from 'node:http';
 import { createServer, connect, type Socket } from 'node:net';
 import { createRequire } from 'node:module';
@@ -39,7 +41,7 @@ const proof: Record<string, unknown> = {
   fixtureWrites: false
 };
 async function browser(...args: string[]) {
-  return (await run('agent-browser', ['--session', session, ...args], { timeout: 25000 })).stdout.trim();
+    return runBrowser(session,args,25000);
 }
 async function evaluate<T>(expression: string): Promise<T> { return JSON.parse(await browser('eval', expression)); }
 async function until(expression: string, timeout = 18000) {
@@ -48,7 +50,7 @@ async function until(expression: string, timeout = 18000) {
   throw new Error(`Condition timeout: ${expression}`);
 }
 async function main() {
-  await build({ entryPoints: ['tests/nomination-replay-harness.tsx'], outfile: `${evidence}/bundle.js`,
+  await bundleEvidence(build, { entryPoints: ['tests/nomination-replay-harness.tsx'], outfile: `${evidence}/bundle.js`,
     bundle: true, platform: 'browser', format: 'iife', jsx: 'automatic',
     define: { 'process.env.NODE_ENV': '"production"' } });
   const backend = await localBackend('pancake-nomination-replay', false);
@@ -59,7 +61,7 @@ async function main() {
   let blackhole = false;
   let droppedBytes = 0;
   const sockets = new Set<Socket>();
-  const proxy = createServer(downstream => {
+  const proxy = ownServer(createServer(downstream => {
     const upstream = connect(backend.identity.port, '127.0.0.1');
     sockets.add(downstream); sockets.add(upstream);
     downstream.on('data', data => { if (blackhole) droppedBytes += data.length; else upstream.write(data); });
@@ -68,10 +70,10 @@ async function main() {
     upstream.on('error', () => downstream.destroy());
     downstream.on('close', () => { sockets.delete(downstream); upstream.destroy(); });
     upstream.on('close', () => { sockets.delete(upstream); downstream.destroy(); });
-  });
-  await new Promise<void>(resolve => proxy.listen(proxyPort, '127.0.0.1', resolve));
+  }));
+  await listen(proxy, proxyPort, '127.0.0.1');
   let token = '';
-  const page = httpServer(async (request, response) => {
+  const page = ownServer(httpServer(async (request, response) => {
     if (request.url === '/bundle.js') {
       response.setHeader('Content-Type', 'text/javascript');
       response.end(await readFile(`${evidence}/bundle.js`));
@@ -85,7 +87,7 @@ async function main() {
         + JSON.stringify({ url: `http://127.0.0.1:${proxyPort}`, token })
         + '</script><script src="/bundle.js"></script></body></html>');
     }
-  });
+  }));
   let pagePort: number | undefined;
   try {
     await run('agent-browser', ['session', 'list']);
@@ -103,7 +105,7 @@ async function main() {
     proof.original = { manager: originalManager, deadline: originalDeadline, turnEvent: originalTurnEvent,
       generation: state.draft.nominationGeneration, timing: { nominationMs: state.draft.nominationMs,
         biddingMs: state.draft.biddingMs, extensionMs: state.draft.extensionMs, capMs: state.draft.capMs } };
-    await new Promise<void>(resolve => page.listen(0, '127.0.0.1', resolve));
+    await listen(page, 0, '127.0.0.1');
     pagePort = (page.address() as import('node:net').AddressInfo).port;
     proof.frontendPort = pagePort;
     await browser('open', `http://127.0.0.1:${pagePort}`);
@@ -221,4 +223,4 @@ async function main() {
     } finally { await writeFile(`${evidence}/proof.json`, JSON.stringify(proof, null, 2)); }
   }
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+withResources(main).catch(error => { console.error(error); process.exitCode = 1; });

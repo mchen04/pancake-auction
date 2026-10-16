@@ -1,16 +1,19 @@
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
-import { repositoryDirectory } from './evidence';
+import { relative, resolve } from 'node:path';
+import { evidenceDirectory, makeEvidenceDirectory, writeEvidenceFile, repositoryDirectory } from './evidence';
 
 export async function runAdmin(name: string, args: Record<string, unknown> = {}) {
     const directory = resolve(repositoryDirectory, process.env.CONVEX_LOCAL_DIR || '.convex/local/default');
     const configuration = JSON.parse(await readFile(`${directory}/config.json`, 'utf8'));
     const url = `http://127.0.0.1:${configuration.ports.cloud}`;
-    const privateDirectory = `${directory}/cli`;
-    await mkdir(privateDirectory, { recursive: true });
+    evidenceDirectory(process.env.EVIDENCE_DIR);
+    const configurationPath = relative(repositoryDirectory, directory);
+    const inProject = configurationPath === '.convex' || configurationPath.startsWith('.convex/');
+    const privateDirectory = inProject ? `${directory}/cli` : evidenceDirectory(`${directory}/cli`, true)!;
+    await (inProject ? mkdir : makeEvidenceDirectory)(privateDirectory, { recursive: true });
     const path = `${privateDirectory}/args-${crypto.randomUUID()}.json`;
-    await writeFile(path, JSON.stringify(args));
+    await (inProject ? writeFile : writeEvidenceFile)(path, JSON.stringify(args));
     try {
         const child = spawn(process.execPath, ['--import', resolve(repositoryDirectory, 'scripts/local-cli.mjs'),
             resolve(repositoryDirectory, 'node_modules/convex/bin/main.js'), 'run', '--url', url, '--admin-key', configuration.adminKey, name],

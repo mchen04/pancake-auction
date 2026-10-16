@@ -150,7 +150,7 @@ export default function Room() {
         <p className="me">{me.name}</p>
       </header>
       {error && <div className="toast" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss">×</button></div>}
-      <BlockPanel {...props} offset={clock.offset} opening={opening} setOpening={setOpening} />
+      <BlockPanel {...props} clockSample={clock.sample} opening={opening} setOpening={setOpening} />
       <nav className="tabbar" role="tablist">
         {tabs.map(([value, label]) => (
           <button key={value} role="tab" aria-selected={tab === value} onClick={() => setTab(value)}>{label}</button>

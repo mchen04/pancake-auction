@@ -1,11 +1,15 @@
+import { makeEvidenceDirectory as mkdir, writeEvidenceFile as writeFile } from '../scripts/evidence';
+import { withResources, ownClient } from '../scripts/resources';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+
 import { ConvexClient } from 'convex/browser';
 import { api } from '../convex/_generated/api';
 import recorded from './fixtures/sleeper-pool.json';
 import type { Player } from '../lib/types';
 import { safeError } from '../scripts/env';
-import { createIsolated, dropIsolated, seedManagers, seedPlayers, claimSeat, getState, act, currentBackend, sleep } from './support';
+import {
+    createIsolated, dropIsolated, seedManagers, seedPlayers, claimSeat, getState, act, currentBackend, sleep
+} from './support';
 async function main() {
     const isolated = await createIsolated('test');
     const poolFrames: { frameBytes: number; resultBytes: number; players: number }[] = [];
@@ -27,7 +31,7 @@ async function main() {
             });
         }
     }
-    const client = new ConvexClient(currentBackend().url, { webSocketConstructor: MeasuredSocket });
+    const client = ownClient(new ConvexClient(currentBackend().url, { webSocketConstructor: MeasuredSocket }));
     const deliveries: { kind: string; bytes: number; status?: string }[] = [];
     const subscriptions: (() => void)[] = [];
     try {
@@ -69,4 +73,4 @@ async function main() {
         await dropIsolated(isolated);
     }
 }
-main().catch(error => { console.error(safeError(error)); process.exitCode = 1; });
+withResources(main).catch(error => { console.error(safeError(error)); process.exitCode = 1; });

@@ -1,5 +1,6 @@
+import { writeEvidenceFile as writeFile, evidenceFile } from './evidence';
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 
 type Metrics = {
     acceptedBids: number;
@@ -19,6 +20,7 @@ export function assertFloors(metrics: Metrics) {
 }
 
 export async function recordSpread(paths: string[], requireVariation = false) {
+    paths = paths.map(evidenceFile);
     const runs = await Promise.all(paths.map(async path => JSON.parse(await readFile(path, 'utf8'))));
     const seeds = runs.map(run => run.seed as number);
     const values = runs.map(run => ({

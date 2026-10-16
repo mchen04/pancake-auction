@@ -1,24 +1,23 @@
+import { makeEvidenceDirectory as mkdir, writeEvidenceFile as writeFile, bundleEvidence } from '../scripts/evidence';
+import { withResources, runBrowser, ownServer, listen } from '../scripts/resources';
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
 import { connect, createServer as createTcpServer, type Socket } from 'node:net';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
-import { promisify } from 'node:util';
 import recorded from './fixtures/sleeper-pool.json';
 import type { Player } from '../lib/types';
 import { createIsolated, dropIsolated, seedManagers, seedPlayers, claimSeat, configure,
     currentBackend, getState, sleep } from './support';
 import { requireClosedPort } from '../scripts/local-backend';
 
-const execute = promisify(execFile);
 const require = createRequire(resolve('package.json'));
 const { build }: typeof import('esbuild') = require('esbuild');
 const session = `pancake-clock-network-${crypto.randomUUID()}`;
 const results: { name: string; result: string; proof?: unknown; error?: string }[] = [];
 async function browser(...args: string[]) {
-    return (await execute('agent-browser', ['--session', session, ...args], { timeout: 20000 })).stdout.trim();
+    return runBrowser(session,args,20000);
 }
 async function evaluate<T>(expression: string): Promise<T> { return JSON.parse(await browser('eval', expression)); }
 async function check(name: string, run: () => Promise<unknown>) {
@@ -28,7 +27,7 @@ async function check(name: string, run: () => Promise<unknown>) {
 async function main() {
     const evidence = `${process.env.EVIDENCE_DIR}/clock-network`;
     await mkdir(evidence, { recursive: true });
-    await build({ entryPoints: ['tests/clock-network-harness.tsx'], outfile: `${evidence}/bundle.js`, bundle: true,
+    await bundleEvidence(build, { entryPoints: ['tests/clock-network-harness.tsx'], outfile: `${evidence}/bundle.js`, bundle: true,
         format: 'iife', platform: 'browser', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' } });
     const isolated = await createIsolated('test');
     let token = '';
@@ -38,7 +37,7 @@ async function main() {
     const sockets = new Set<Socket>();
     const timers = new Set<ReturnType<typeof setTimeout>>();
     const traffic: { method: string; at: number }[] = [];
-    const proxy = createTcpServer(downstream => {
+    const proxy = ownServer(createTcpServer(downstream => {
         const upstream = connect(Number(new URL(currentBackend().url).port), '127.0.0.1');
         for (const socket of [upstream, downstream]) {
             sockets.add(socket);
@@ -61,11 +60,11 @@ async function main() {
             forward(data, upstream);
         });
         upstream.on('data', data => forward(data, downstream));
-    });
-    await new Promise<void>(resolve => proxy.listen(0, '127.0.0.1', resolve));
+    }));
+    await listen(proxy, 0, '127.0.0.1');
     const proxyAddress = proxy.address();
     assert(proxyAddress && typeof proxyAddress !== 'string');
-    const server = createServer(async (request, response) => {
+    const server = ownServer(createServer(async (request, response) => {
         if (request.url === '/bundle.js') {
             response.setHeader('Content-Type', 'text/javascript');
             response.end(await readFile(`${evidence}/bundle.js`));
@@ -73,8 +72,8 @@ async function main() {
             + JSON.stringify({ url: currentBackend().url, token, skew, disableTimeout,
                 proxyUrl: `http://127.0.0.1:${proxyAddress.port}` })
             + '</script><script src="/bundle.js"></script></body></html>');
-    });
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    }));
+    await listen(server, 0, '127.0.0.1');
     const address = server.address();
     assert(address && typeof address !== 'string');
     const frontendPort = address.port;
@@ -156,4 +155,4 @@ async function main() {
     }
     assert(results.every(result => result.result === 'passed'), 'Network clock regressions must pass');
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+withResources(main).catch(error => { console.error(error); process.exitCode = 1; });

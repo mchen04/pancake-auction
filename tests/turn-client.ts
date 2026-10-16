@@ -1,8 +1,10 @@
+import { makeEvidenceDirectory as mkdir, writeEvidenceFile as writeFile, bundleEvidence } from '../scripts/evidence';
+import { withResources, runBrowser, ownServer, listen } from '../scripts/resources';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createServer } from 'node:http';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { createIsolated, dropIsolated, seedManagers, seedPlayers, claimSeat, configure,
@@ -17,7 +19,7 @@ const { build }: typeof import('esbuild') = require('esbuild');
 const session = `pancake-turn-client-${crypto.randomUUID()}`;
 const results: { name: string; result: string; proof?: unknown; error?: string }[] = [];
 async function browser(...args: string[]) {
-    return (await execute('agent-browser', ['--session', session, ...args], { timeout: 25000 })).stdout.trim();
+    return runBrowser(session,args,25000);
 }
 async function evaluate<T>(expression: string): Promise<T> { return JSON.parse(await browser('eval', expression)); }
 async function until(expression: string, timeout = 12000) {
@@ -36,7 +38,7 @@ async function check(name: string, run: () => Promise<unknown>) {
 async function main() {
     const evidence = `${process.env.EVIDENCE_DIR}/turn-client`;
     await mkdir(evidence, { recursive: true });
-    await build({ entryPoints: ['tests/turn-client-harness.tsx'], outfile: `${evidence}/bundle.js`, bundle: true,
+    await bundleEvidence(build, { entryPoints: ['tests/turn-client-harness.tsx'], outfile: `${evidence}/bundle.js`, bundle: true,
         format: 'iife', platform: 'browser', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' } });
     const isolated = await createIsolated('test');
     await seedManagers(); await seedPlayers(recorded.players as Player[]);
@@ -44,7 +46,7 @@ async function main() {
     const otherToken = await claimSeat(2);
     let initial = await getState();
     let skew = 0;
-    const server = createServer(async (request, response) => {
+    const server = ownServer(createServer(async (request, response) => {
         if (request.url === '/bundle.js') {
             response.setHeader('Content-Type', 'text/javascript');
             response.end(await readFile(`${evidence}/bundle.js`));
@@ -55,8 +57,8 @@ async function main() {
                 + JSON.stringify({ token, url: currentBackend().url, skew })
                 + '</script><script src="/bundle.js"></script></body></html>');
         }
-    });
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    }));
+    await listen(server, 0, '127.0.0.1');
     const address = server.address();
     assert(address && typeof address !== 'string');
     const open = async (mode = 'components') => {
@@ -199,4 +201,4 @@ async function main() {
     }
     assert(results.every(result => result.result === 'passed'), 'Every client boundary check must pass');
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+withResources(main).catch(error => { console.error(error); process.exitCode = 1; });

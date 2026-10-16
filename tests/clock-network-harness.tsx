@@ -1,12 +1,26 @@
+import { ClockSamples } from '../lib/clock-samples';
 import { createRoot } from 'react-dom/client';
 import { AuctionProvider } from '../app/provider';
 import Room from '../app/page';
 
 const host = window as unknown as { config: { url: string; proxyUrl: string; token: string; skew: number; disableTimeout: boolean };
-    clockNetwork: { nativeNow: () => number; responses: number; offsets: number[] } };
+    clockNetwork: { nativeNow: () => number; responses: number; offsets: number[]; accepted: unknown[]; freeze: () => void; wake: () => void } };
 const nativeNow = Date.now.bind(Date);
 const nativeFetch = window.fetch.bind(window);
-host.clockNetwork = { nativeNow, responses: 0, offsets: [] };
+const nativeMonotonic = performance.now.bind(performance);
+let pausedAt: number | null = null;
+let slept = 0;
+const accepted: unknown[] = [];
+host.clockNetwork = { nativeNow, responses: 0, offsets: [], accepted,
+    freeze: () => { pausedAt = nativeMonotonic(); },
+    wake: () => { if (pausedAt !== null) slept += nativeMonotonic() - pausedAt; pausedAt = null; } };
+Object.defineProperty(performance, 'now', { value: () => (pausedAt ?? nativeMonotonic()) - slept });
+const accept = ClockSamples.prototype.accept;
+ClockSamples.prototype.accept = function(...args: Parameters<typeof accept>) {
+    const result = accept.apply(this, args);
+    if (result !== null) accepted.push(result);
+    return result;
+};
 Date.now = () => nativeNow() + host.config.skew;
 if (host.config.disableTimeout) Object.defineProperty(AbortSignal, 'timeout', { value: undefined });
 window.fetch = async (input, init) => {

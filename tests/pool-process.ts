@@ -1,6 +1,8 @@
+import { makeEvidenceDirectory as mkdir, writeEvidenceFile as writeFile } from '../scripts/evidence';
+import { withResources, ownProcess } from '../scripts/resources';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+
 import { resolve } from 'node:path';
 import { AuctionClient } from '../lib/client';
 import { buildPool } from '../lib/import-data';
@@ -9,8 +11,8 @@ import { importFixture } from './import-fixture';
 import { createIsolated, dropIsolated, seedManagers, seedPlayers, claimSeat, configure,
     currentBackend, sleep } from './support';
 async function child(args: string[], input: unknown, environment: Record<string, string> = {}) {
-    const process_ = spawn(process.execPath, ['--import', 'tsx', ...args], {
-        env: { PATH: process.env.PATH, NODE_ENV: 'test', ...environment }, stdio: ['pipe', 'pipe', 'pipe'] });
+    const process_ = ownProcess(spawn(process.execPath, ['--import', 'tsx', ...args], {
+        env: { PATH: process.env.PATH, NODE_ENV: 'test', ...environment }, stdio: ['pipe', 'pipe', 'pipe'] }));
     let output = '';
     let error = '';
     process_.stdout.on('data', part => { output += String(part); });
@@ -60,4 +62,4 @@ async function main() {
         console.log('PASS B3/C5 warm client observes another process import and start before expiry');
     } finally { await dropIsolated(isolated); }
 }
-main().catch(error => { console.error(safeError(error)); process.exitCode = 1; });
+withResources(main).catch(error => { console.error(safeError(error)); process.exitCode = 1; });

@@ -1,6 +1,12 @@
+import { mkdir as mkdirCache } from 'node:fs/promises';
+import {
+    copyEvidence as cp, makeEvidenceDirectory as mkdir, makeEvidenceTemporaryDirectory as mkdtemp,
+    writeEvidenceFile as writeFile
+} from '../scripts/evidence';
+import { withResources, ownProcess, ownCleanup } from '../scripts/resources';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { cp, mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { rm, stat, symlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { ConvexHttpClient } from 'convex/browser';
 import { makeFunctionReference } from 'convex/server';
@@ -13,6 +19,7 @@ async function main() {
     const root = evidenceDirectory(process.env.EVIDENCE_DIR, true)!;
     await mkdir(root, { recursive: true });
     const directory = await mkdtemp(`${root}/local-workflow-`);
+    ownCleanup(async () => { await rm(directory, { recursive: true, force: true }); });
     const port = await freePort();
     const sitePort = await freePort();
     assert(![3210, 3211, 3100, 3220, 3221, 3917].includes(port));
@@ -34,9 +41,9 @@ async function main() {
         await Promise.all([requireClosedPort(port), requireClosedPort(sitePort)]);
     };
     const start = async () => {
-        child = spawn('npm', ['run', 'backend:local'], { cwd: directory, detached: true,
+        child = ownProcess(spawn('npm', ['run', 'backend:local'], { cwd: directory, detached: true,
             env: { PATH: process.env.PATH, NODE_ENV: 'test', CONVEX_LOCAL_CLOUD_PORT: String(port),
-                CONVEX_LOCAL_SITE_PORT: String(sitePort) }, stdio: ['ignore', 'pipe', 'pipe'] });
+                CONVEX_LOCAL_SITE_PORT: String(sitePort) }, stdio: ['ignore', 'pipe', 'pipe'] }), 'SIGTERM', true);
         child.stdout!.on('data', data => { log += String(data); });
         child.stderr!.on('data', data => { log += String(data); });
         for (let attempt = 0; attempt < 600; attempt++) {
@@ -56,7 +63,7 @@ async function main() {
         await cp('package.json', `${directory}/package.json`);
         await symlink(resolve('node_modules'), `${directory}/node_modules`, 'dir');
         const cache = resolve('.convex/backend-binary-cache');
-        await mkdir(cache, { recursive: true });
+        await mkdirCache(cache, { recursive: true });
         await mkdir(`${directory}/.convex/cli-home/.cache`, { recursive: true });
         await symlink(cache, `${directory}/.convex/cli-home/.cache/convex`, 'dir');
         await start();
@@ -65,9 +72,9 @@ async function main() {
         assert((await stat(`${directory}/.env.local`)).size > 0);
         const frontendPort = await freePort();
         proof.frontendPort = frontendPort;
-        frontend = spawn('npm', ['run', 'dev', '--', '--webpack', '--port', String(frontendPort)],
+        frontend = ownProcess(spawn('npm', ['run', 'dev', '--', '--webpack', '--port', String(frontendPort)],
             { cwd: directory, detached: true, env: { PATH: process.env.PATH, NODE_ENV: 'development' },
-                stdio: ['ignore', 'pipe', 'pipe'] });
+                stdio: ['ignore', 'pipe', 'pipe'] }), 'SIGTERM', true);
         frontend.stdout!.on('data', data => { frontendLog += String(data); });
         frontend.stderr!.on('data', data => { frontendLog += String(data); });
         let frontendLoadedUrl = false;
@@ -119,4 +126,4 @@ async function main() {
         await writeFile(`${root}/local-workflow.json`, JSON.stringify(proof, null, 2));
     }
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+withResources(main).catch(error => { console.error(error); process.exitCode = 1; });

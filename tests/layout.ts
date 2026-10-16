@@ -1,25 +1,26 @@
+import { makeEvidenceDirectory as mkdir, writeEvidenceFile as writeFile, bundleEvidence } from '../scripts/evidence';
+import { withResources, runBrowser, ownServer, listen } from '../scripts/resources';
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { resolve, basename } from 'node:path';
-import { promisify } from 'node:util';
 import recorded from './fixtures/sleeper-pool.json';
 import { matching } from '../lib/rules';
 import type { Player } from '../lib/types';
 import { safeError } from '../scripts/env';
 import { roomFixture } from './room-fixture';
-import { createIsolated, dropIsolated, seedManagers, seedPlayers, claimSeat, configure, currentBackend } from './support';
+import {
+    createIsolated, dropIsolated, seedManagers, seedPlayers, claimSeat, configure, currentBackend
+} from './support';
 
-const execute = promisify(execFile);
 const require = createRequire(resolve('package.json'));
 const { build }: typeof import('esbuild') = require('esbuild');
 const session = `pancake-layout-${randomBytes(6).toString('hex')}`;
 const results: { name: string; result: string; error?: string; measurements?: unknown }[] = [];
 async function browser(...args: string[]) {
-    return (await execute('agent-browser', ['--session', session, ...args], { timeout: 20000 })).stdout.trim();
+    return runBrowser(session,args,20000);
 }
 async function evaluate(expression: string) {
     return JSON.parse(await browser('eval', expression));
@@ -117,7 +118,7 @@ async function main() {
     await configure({ roster: state.roster, draft: state.draft, lot: state.lot,
         managers: [{ id: 1, budget: 335 }] });
     await writeFile(`${dir}/fixture.json`, JSON.stringify(state));
-    await build({ entryPoints: ['tests/layout-harness.tsx'], outfile: `${dir}/bundle.js`, bundle: true,
+    await bundleEvidence(build, { entryPoints: ['tests/layout-harness.tsx'], outfile: `${dir}/bundle.js`, bundle: true,
         platform: 'browser', format: 'esm', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' } });
     const files = await readdir('.next/static/chunks');
     const styles = await Promise.all(files.filter(file => file.endsWith('.css'))
@@ -126,7 +127,7 @@ async function main() {
     assert(fonts.includes('IBM Plex Sans') && fonts.includes('Barlow Condensed'));
     const css = fonts + ':root{--font-body:"IBM Plex Sans";--font-display:"Barlow Condensed"}'
         + await readFile('app/globals.css', 'utf8');
-    const server = createServer(async (request, response) => {
+    const server = ownServer(createServer(async (request, response) => {
         const path = new URL(request.url!, 'http://localhost').pathname;
         if (path === '/client-config.json') {
             const player = request.url?.includes('player=short')
@@ -150,8 +151,8 @@ async function main() {
         } else response.end('<!doctype html><html><head><meta name="viewport" content="width=device-width">'
             + '<meta charset="utf-8"><link rel="stylesheet" href="/style.css"></head><body><div id="root"></div>'
             + '<script type="module" src="/bundle.js"></script></body></html>');
-    });
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    }));
+    await listen(server, 0, '127.0.0.1');
     const address = server.address();
     assert(address && typeof address === 'object');
     try {
@@ -278,4 +279,4 @@ async function main() {
     }
     assert(results.every(result => result.result === 'passed'), 'Layout regressions must pass');
 }
-main().catch(error => { console.error(safeError(error)); process.exitCode = 1; });
+withResources(main).catch(error => { console.error(safeError(error)); process.exitCode = 1; });

@@ -1,12 +1,14 @@
+import { writeEvidenceFile as writeFile } from '../scripts/evidence';
+import { withResources, ownServer, listen } from '../scripts/resources';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { writeFile } from 'node:fs/promises';
+
 import { createServer } from 'node:net';
 import { basename } from 'node:path';
 import { localBackend, portListening as listening, requireClosedPort, sleep } from '../scripts/local-backend';
 async function delayedShutdownControl() {
-    const server = createServer();
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const server = ownServer(createServer());
+    await listen(server, 0, '127.0.0.1');
     const address = server.address();
     assert(address && typeof address !== 'string');
     const port = address.port;
@@ -68,4 +70,4 @@ async function main() {
         await writeFile(`${process.env.EVIDENCE_DIR}/teardown.json`, JSON.stringify(proof, null, 2));
     }
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+withResources(main).catch(error => { console.error(error); process.exitCode = 1; });

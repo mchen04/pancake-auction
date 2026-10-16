@@ -1,22 +1,23 @@
+import { makeEvidenceDirectory as mkdir, writeEvidenceFile as writeFile, bundleEvidence } from '../scripts/evidence';
+import { withResources, runBrowser, ownServer, listen } from '../scripts/resources';
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
-import { promisify } from 'node:util';
 
 import { roomFixture } from './room-fixture';
-import { createIsolated, dropIsolated, seedManagers, seedPlayers, claimSeat, configure, currentBackend, getState, act } from './support';
+import {
+    createIsolated, dropIsolated, seedManagers, seedPlayers, claimSeat, configure, currentBackend, getState, act
+} from './support';
 
-const execute = promisify(execFile);
 const require = createRequire(resolve('package.json'));
 const { build }: typeof import('esbuild') = require('esbuild');
 const results: { name: string; result: string; error?: string }[] = [];
 const session = `pancake-review-${randomBytes(6).toString('hex')}`;
 async function browser(...args: string[]) {
-    return (await execute('agent-browser', ['--session', session, ...args], { timeout: 20000 })).stdout.trim();
+    return runBrowser(session,args,20000);
 }
 async function evaluate(expression: string) {
     return JSON.parse(await browser('eval', expression));
@@ -33,7 +34,7 @@ async function main() {
     if (!root) throw new Error('Set EVIDENCE_DIR');
     const dir = `${root}/ui-regressions`;
     await mkdir(dir, { recursive: true });
-    await build({ entryPoints: ['tests/ui-harness.tsx'], outfile: `${dir}/bundle.js`, bundle: true,
+    await bundleEvidence(build, { entryPoints: ['tests/ui-harness.tsx'], outfile: `${dir}/bundle.js`, bundle: true,
         platform: 'browser', format: 'iife', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' } });
     const isolated = await createIsolated('test');
     await seedManagers();
@@ -42,7 +43,7 @@ async function main() {
     const tokens = await Promise.all(initial.managers.map(manager => claimSeat(manager.id)));
     await configure({ draft: { nominationMs: 600000, biddingMs: 600000 } });
     const added = { ...initial.players[1], id: 'review-new', name: 'Review Added Player' };
-    const server = createServer(async (request, response) => {
+    const server = ownServer(createServer(async (request, response) => {
         if (request.url?.startsWith('/fixture/')) {
             if (request.url.endsWith('replace')) await seedPlayers([initial.players[0], added]);
             if (request.url.endsWith('live')) {
@@ -63,8 +64,8 @@ async function main() {
             + '<div id="root"></div><script>window.roomConfig='
             + JSON.stringify({ url: currentBackend().url, token: tokens[0] })
             + '</script><script src="/bundle.js"></script></body></html>');
-    });
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    }));
+    await listen(server, 0, '127.0.0.1');
     const address = server.address();
     assert(address && typeof address === 'object');
     const base = `http://127.0.0.1:${address.port}`;
@@ -168,4 +169,4 @@ async function main() {
     }
     assert(results.every(result => result.result === 'passed'), 'Browser regression tests must pass');
 }
-main().catch(error => { console.error(error instanceof Error ? error.message : error); process.exitCode = 1; });
+withResources(main).catch(error => { console.error(error instanceof Error ? error.message : error); process.exitCode = 1; });

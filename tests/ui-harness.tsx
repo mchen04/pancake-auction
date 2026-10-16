@@ -1,3 +1,4 @@
+const clockSample = { serverNow: Date.now(), monotonic: performance.now() };
 import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Room from '../app/page';
@@ -24,7 +25,7 @@ function BidCase() {
         <button id="lot-b" onClick={() => setState(nextLot(roomFixture()))}>Lot B</button>
         <button id="gap" onClick={() => setState(gap(roomFixture()))}>Nomination gap</button>
         <BlockPanel state={state} me={state.managers[0]} busy={false} connected send={send}
-            offset={0} opening={1} setOpening={() => {}} />
+            clockSample={clockSample} opening={1} setOpening={() => {}} />
     </>;
 }
 function ConfirmCase() {

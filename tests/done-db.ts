@@ -1,5 +1,6 @@
+import { makeEvidenceDirectory as mkdir, writeEvidenceFile as writeFile } from '../scripts/evidence';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+
 import { act, claimSeat, getState } from './support';
 import { canNominate, counts, legalPlacements, maxBid, taxiEligibility } from '../lib/rules';
 import type { AuctionState, Placement } from '../lib/types';

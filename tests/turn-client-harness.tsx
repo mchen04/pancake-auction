@@ -1,3 +1,4 @@
+const clockSample = { serverNow: Date.now(), monotonic: performance.now() };
 import { createRoot } from 'react-dom/client';
 import { useEffect, useState } from 'react';
 import { AuctionProvider } from '../app/provider';
@@ -82,7 +83,7 @@ function Components() {
     const props = { state, me: state.managers[0], busy: false, connected: true,
         send: async (action: Action) => { host.actions.push(action); } };
     return <><CommissionerBar {...props} /><BlockPanel {...props}
-        offset={0} opening={1} setOpening={() => {}} /></>;
+        clockSample={clockSample} opening={1} setOpening={() => {}} /></>;
 }
 const room = new URL(location.href).searchParams.get('mode') === 'room';
 if (room) localStorage.setItem('pancake-seat', host.config.token);

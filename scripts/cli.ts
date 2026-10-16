@@ -2,8 +2,9 @@ import { spawn } from 'node:child_process';
 import { runAdmin } from './admin-client';
 import { checkLeague } from './readiness';
 import { safeError } from './env';
-import { repositoryDirectory } from './evidence';
+import { evidenceDirectory, repositoryDirectory } from './evidence';
 async function main() {
+    evidenceDirectory(process.env.EVIDENCE_DIR);
     const [command, ...args] = process.argv.slice(2);
     if (command === 'managers') console.log(JSON.stringify(await runAdmin('admin:managers')));
     else if (command === 'release') {

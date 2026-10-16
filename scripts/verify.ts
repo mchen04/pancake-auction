@@ -1,6 +1,7 @@
+import { makeEvidenceDirectory as mkdir, writeEvidenceFile as writeFile } from './evidence';
 import { evidenceDirectory, repositoryDirectory } from "./evidence";
 import { spawn } from "node:child_process";
-import { mkdir, readdir, statfs, writeFile } from "node:fs/promises";
+import { readdir, statfs } from 'node:fs/promises';
 import { safeError } from "./env";
 import { recordSpread } from "./simulation-results";
 async function main() {

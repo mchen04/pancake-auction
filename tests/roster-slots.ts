@@ -1,7 +1,9 @@
+import { makeEvidenceDirectory as mkdir, writeEvidenceFile as writeFile, bundleEvidence } from '../scripts/evidence';
+import { withResources, runBrowser, ownServer, listen } from '../scripts/resources';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { basename, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -24,7 +26,7 @@ const mover = players.find(player => player.id !== freshPlayer.id && player.inju
 const capacities = { Starters: 10, Bench: 10, Taxi: 3, IR: 2 };
 const results: { name: string; result: string; proof?: unknown; error?: string }[] = [];
 async function browser(...args: string[]) {
-    return (await execute('agent-browser', ['--session', session, ...args], { timeout: 20000 })).stdout.trim();
+    return runBrowser(session,args,20000);
 }
 async function evaluate<T>(expression: string): Promise<T> { return JSON.parse(await browser('eval', expression)); }
 async function until(expression: string) {
@@ -166,7 +168,7 @@ async function main() {
     const token = tokens[0];
     let memberToken = tokens[1];
     let viewerToken = token;
-    await build({ entryPoints: ['tests/layout-harness.tsx'], outfile: `${evidence}/bundle.js`, bundle: true,
+    await bundleEvidence(build, { entryPoints: ['tests/layout-harness.tsx'], outfile: `${evidence}/bundle.js`, bundle: true,
         platform: 'browser', format: 'esm', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' } });
     let fontCss = '';
     try {
@@ -177,7 +179,7 @@ async function main() {
     } catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error; }
     const css = fontCss + ':root{--font-body:"IBM Plex Sans",Arial;--font-display:"Barlow Condensed",Arial}'
         + await readFile('app/globals.css', 'utf8');
-    const server = createServer(async (request, response) => {
+    const server = ownServer(createServer(async (request, response) => {
         const path = new URL(request.url!, 'http://localhost').pathname;
         if (path === '/client-config.json') {
             response.setHeader('Content-Type', 'application/json');
@@ -191,8 +193,8 @@ async function main() {
         } else response.end('<!doctype html><html><head><meta name="viewport" content="width=device-width">'
             + '<meta charset="utf-8"><link rel="stylesheet" href="/style.css"></head><body><div id="root"></div>'
             + '<script type="module" src="/bundle.js"></script></body></html>');
-    });
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    }));
+    await listen(server, 0, '127.0.0.1');
     const address = server.address(); assert(address && typeof address !== 'string');
     const port = address.port;
     async function open() {
@@ -690,4 +692,4 @@ async function main() {
     }
     assert(results.every(result => result.result === 'passed'), 'Every roster-slot check must pass');
 }
-main().catch(error => { console.error(error); process.exitCode=1; });
+withResources(main).catch(error => { console.error(error); process.exitCode=1; });

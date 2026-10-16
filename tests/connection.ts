@@ -1,22 +1,21 @@
+import { makeEvidenceDirectory as mkdir, writeEvidenceFile as writeFile, bundleEvidence } from '../scripts/evidence';
+import { withResources, runBrowser, ownServer, listen } from '../scripts/resources';
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
-import { promisify } from 'node:util';
 import recorded from './fixtures/sleeper-pool.json';
 import type { Player } from '../lib/types';
 import { createIsolated, dropIsolated, seedManagers, seedPlayers, claimSeat, configure,
     currentBackend, getState, act, sleep } from './support';
 
-const execute = promisify(execFile);
 const require = createRequire(resolve('package.json'));
 const { build }: typeof import('esbuild') = require('esbuild');
 const session = `pancake-connection-${crypto.randomUUID()}`;
 const results: { name: string; result: string; error?: string }[] = [];
 async function browser(...args: string[]) {
-    return (await execute('agent-browser', ['--session', session, ...args], { timeout: 20000 })).stdout.trim();
+    return runBrowser(session,args,20000);
 }
 async function evaluate(expression: string) { return JSON.parse(await browser('eval', expression)); }
 async function until(expression: string) {
@@ -36,21 +35,21 @@ async function check(name: string, test: () => Promise<void>) {
 async function main() {
     const dir = `${process.env.EVIDENCE_DIR}/connection`;
     await mkdir(dir, { recursive: true });
-    await build({ entryPoints: ['tests/connection-harness.tsx'], outfile: `${dir}/bundle.js`, bundle: true,
+    await bundleEvidence(build, { entryPoints: ['tests/connection-harness.tsx'], outfile: `${dir}/bundle.js`, bundle: true,
         platform: 'browser', format: 'iife', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' } });
     const isolated = await createIsolated('test');
     await seedManagers();
     await seedPlayers(recorded.players.slice(0, 30) as Player[]);
     const token = await claimSeat(1);
-    const server = createServer(async (request, response) => {
+    const server = ownServer(createServer(async (request, response) => {
         if (request.url === '/bundle.js') {
             response.setHeader('Content-Type', 'text/javascript');
             response.end(await readFile(`${dir}/bundle.js`));
         } else response.end('<!doctype html><html><body><div id="root"></div><script>window.roomConfig='
             + JSON.stringify({ url: currentBackend().url, token })
             + '</script><script src="/bundle.js"></script></body></html>');
-    });
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    }));
+    await listen(server, 0, '127.0.0.1');
     const address = server.address();
     assert(address && typeof address !== 'string');
     const base = `http://127.0.0.1:${address.port}`;
@@ -188,4 +187,4 @@ async function main() {
     }
     assert(results.every(result => result.result === 'passed'), 'Connection regressions must pass');
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+withResources(main).catch(error => { console.error(error); process.exitCode = 1; });

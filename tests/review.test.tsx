@@ -38,7 +38,7 @@ describe('review component regressions', () => {
         state.players = [];
         const html = renderToString(createElement(BlockPanel, {
             state, me: state.managers[0], busy: false, connected: true, send: async () => {},
-            offset: 0, opening: 1, setOpening: () => {}
+            clockSample: null, opening: 1, setOpening: () => {}
         }));
         expect(html).toContain('bid-controls');
         expect(html).toContain('room-0');

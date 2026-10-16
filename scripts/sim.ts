@@ -1,14 +1,18 @@
+import { makeEvidenceDirectory as mkdir, writeEvidenceFile as writeFile } from './evidence';
 import { evidenceDirectory, repositoryDirectory } from "./evidence";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+
 import poolFixture from "../tests/fixtures/sleeper-pool.json";
 import { safeError } from "./env";
 import { auditDraft } from "./audit";
 import { Bot } from "./bot";
 import { Competition } from "./competition";
 import { assertFloors, recordSpread } from "./simulation-results";
-import { createIsolated, dropIsolated, seedManagers, seedPlayers, sleep, configure, inspect, events, getState, currentBackend } from "../tests/support";
+import {
+    createIsolated, dropIsolated, seedManagers, seedPlayers, sleep, configure, inspect, events, getState,
+    currentBackend
+} from "../tests/support";
 
 import { counts, maxBid, taxiEligibility } from "../lib/rules";
 import type { AuctionState, Player } from "../lib/types";

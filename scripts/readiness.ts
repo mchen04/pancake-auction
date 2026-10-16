@@ -1,6 +1,8 @@
+import { evidenceDirectory } from './evidence';
 import managers from '../league/managers.json';
 import { runAdmin } from './admin-client';
 export async function checkLeague(inspect = () => runAdmin('admin:inspect')) {
+    evidenceDirectory(process.env.EVIDENCE_DIR);
     const data = await inspect();
     const draft = data.draft?.value;
     const expected = managers.map(manager => manager.name).sort();

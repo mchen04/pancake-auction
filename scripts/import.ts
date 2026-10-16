@@ -1,5 +1,4 @@
-import { evidenceDirectory } from "./evidence";
-import { mkdir } from "node:fs/promises";
+import { evidenceDirectory, evidenceFile, makeEvidenceDirectory } from "./evidence";
 import { runAdmin } from "./admin-client";
 import { readFile } from "node:fs/promises";
 import { buildPool, sourceUrls } from "../lib/import-data";
@@ -10,8 +9,10 @@ async function main() {
     console.log("Sleeper requests the players endpoint at most once per day. Reuse the evidence snapshot within 24 hours.");
     const startedAt = new Date();
     const evidence = evidenceDirectory(process.env.EVIDENCE_DIR);
-    const snapshot = evidence ? `${evidence}/import/sleeper-2026.json` : null;
-    if (evidence) await mkdir(`${evidence}/import`, { recursive: true });
+    const directory = evidence ? evidenceDirectory(`${evidence}/import`, true)! : null;
+    const snapshot = directory ? evidenceFile(`${directory}/sleeper-2026.json`) : null;
+    const sources = directory ? sourceUrls.map((_, index) => evidenceFile(`${directory}/source-${index}.json`)) : [];
+    if (directory) await makeEvidenceDirectory(directory, { recursive: true });
     const option = process.argv.indexOf('--snapshot');
     const explicit = option >= 0 ? JSON.parse(await readFile(process.argv[option + 1], 'utf8')) as Snapshot : null;
     if (explicit && (!Number.isFinite(Date.parse(explicit.fetchedAt)) || !Array.isArray(explicit.data))) {
@@ -22,7 +23,7 @@ async function main() {
     const fetchedTimes: number[] = [];
     if (!raw.length) {
         for (let i = 0; i < sourceUrls.length; i++) {
-            const initial = evidence ? `${evidence}/import/source-${i}.json` : null;
+            const initial = sources[i] ?? null;
             let source: Snapshot | null = initial ? await readSnapshot(initial) : null;
             if (!source) {
                 const response = await fetch(sourceUrls[i], {

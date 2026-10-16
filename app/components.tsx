@@ -1,4 +1,5 @@
 'use client';
+import { estimatedServerTime, type ClockAnchor } from '../lib/clock-samples';
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import {
   canNominate, counts, legalPlacements, matching, maxBid, rankedDynastyAdp, slots, taxiEligibility, timeoutNominee
@@ -147,21 +148,21 @@ export function PlayerLine({ player }: { player: Player }) {
   );
 }
 
-function remainingMs(draft: Draft, clock: number, offset: number | null) {
+function remainingMs(draft: Draft, clock: number, clockSample: ClockAnchor | null) {
   if (draft.status === 'paused') return draft.remainingMs ?? 0;
-  if (draft.status !== 'running' || draft.deadline === null || offset === null) return null;
-  return Math.max(0, draft.deadline - clock - offset);
+  if (draft.status !== 'running' || draft.deadline === null || clockSample === null) return null;
+  return Math.max(0, draft.deadline - estimatedServerTime(clockSample, clock));
 }
-export function ShotClock({ draft, offset, compact = false }: {
-  draft: Draft; offset: number | null; compact?: boolean
+export function ShotClock({ draft, clockSample, compact = false }: {
+  draft: Draft; clockSample: ClockAnchor | null; compact?: boolean
 }) {
   const [clock, setClock] = useState(0);
   useEffect(() => {
-    setClock(Date.now());
-    const tick = setInterval(() => setClock(Date.now()), 100);
+    setClock(performance.now());
+    const tick = setInterval(() => setClock(performance.now()), 100);
     return () => clearInterval(tick);
   }, []);
-  const remaining = remainingMs(draft, clock, offset);
+  const remaining = remainingMs(draft, clock, clockSample);
   const total = draft.phase === 'bidding' ? draft.capMs : draft.nominationMs;
   const urgent = remaining !== null && remaining < 4000 && draft.status === 'running';
   const digits = remaining === null ? '--' : remaining >= 10000
@@ -309,7 +310,7 @@ function bidBlocker(props: RoomProps, maximum: number, passed: boolean) {
   return '';
 }
 
-function BidControls(props: RoomProps & { player: Player | undefined; offset: number | null }) {
+function BidControls(props: RoomProps & { player: Player | undefined; clockSample: ClockAnchor | null }) {
   const { state, me, send, player } = props;
   const lot = state.lot!;
   const [custom, setCustom] = useState('');
@@ -326,7 +327,7 @@ function BidControls(props: RoomProps & { player: Player | undefined; offset: nu
         <strong>{dollars(lot.highBid)}</strong>
         <span>{lot.highBidderId === me.id ? 'You lead' : `${nameOf(state, lot.highBidderId)} leads`}</span>
         <small>Nominated by {nameOf(state, lot.nominatorId)}</small>
-        <ShotClock draft={state.draft} offset={props.offset} compact />
+        <ShotClock draft={state.draft} clockSample={props.clockSample} compact />
       </p>
       <div className="bid-buttons">
         {[1, 5].map(step => (
@@ -470,9 +471,9 @@ function LastWin(props: RoomProps) {
 }
 
 export function BlockPanel(props: RoomProps & {
-  offset: number | null; opening: number; setOpening: (value: number) => void
+  clockSample: ClockAnchor | null; opening: number; setOpening: (value: number) => void
 }) {
-  const { state, offset } = props;
+  const { state, clockSample } = props;
   const [detailsFor, setDetailsFor] = useState<number | null>(null);
   const lot = state.lot;
   const showDetails = lot !== null && detailsFor === lot.id;
@@ -500,7 +501,7 @@ export function BlockPanel(props: RoomProps & {
               </>
             ) : <NominationView {...props} />}
           </div>
-          <ShotClock draft={state.draft} offset={offset} />
+          <ShotClock draft={state.draft} clockSample={clockSample} />
         </div>
         {lot && player && showDetails && <PlayerDetails player={player} />}
       </div>

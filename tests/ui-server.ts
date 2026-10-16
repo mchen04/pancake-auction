@@ -1,5 +1,7 @@
+import { makeEvidenceDirectory as mkdir, writeEvidenceFile as writeFile } from '../scripts/evidence';
+import { withResources, ownProcess } from '../scripts/resources';
 import { spawn } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+
 import recorded from './fixtures/sleeper-pool.json';
 import type { Player } from '../lib/types';
 import { freePort, stopProcess } from '../scripts/local-backend';
@@ -11,8 +13,8 @@ async function main() {
     await seedPlayers(recorded.players as Player[]);
     await configure({ draft: { nominationMs: 120000, biddingMs: 120000, capMs: 150000 } });
     const port = await freePort();
-    const server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '-p', String(port)],
-        { env: { ...process.env, CONVEX_URL: currentBackend().url }, stdio: 'inherit' });
+    const server = ownProcess(spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '-p', String(port)],
+        { env: { ...process.env, CONVEX_URL: currentBackend().url }, stdio: 'inherit' }));
     const dir = `${process.env.EVIDENCE_DIR}/ui`;
     await mkdir(dir, { recursive: true });
     await writeFile(`${dir}/active.json`, JSON.stringify({ backend: currentBackend().identity, port }));
@@ -28,4 +30,4 @@ async function main() {
     await new Promise(resolve => server.once('exit', resolve));
     await close();
 }
-main().catch(error => { console.error(safeError(error)); process.exitCode = 1; });
+withResources(main).catch(error => { console.error(safeError(error)); process.exitCode = 1; });

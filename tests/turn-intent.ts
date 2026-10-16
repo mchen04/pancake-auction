@@ -1,5 +1,6 @@
+import { makeEvidenceDirectory as mkdir, writeEvidenceFile as writeFile } from '../scripts/evidence';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+
 import { api } from '../convex/_generated/api';
 import { act, claimSeat, configure, createIsolated, currentClient, dropIsolated, getState,
     seedManagers, seedPlayers } from './support';

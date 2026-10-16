@@ -1,19 +1,23 @@
+import {
+    makeEvidenceDirectory as mkdir, makeEvidenceTemporaryDirectory as mkdtemp, writeEvidenceFile as writeFile
+} from '../scripts/evidence';
+import { withResources, runBrowser, ownServer, listen, ownProcess } from '../scripts/resources';
 import assert from 'node:assert/strict';
-import { execFile, spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+
 import { createServer } from 'node:net';
 import { resolve } from 'node:path';
-import { promisify } from 'node:util';
 import { buildPool } from '../lib/import-data';
 import { safeError } from '../scripts/env';
 import { importFixture } from './import-fixture';
-import { createIsolated, dropIsolated, seedManagers, seedPlayers, sleep, configure, currentBackend, getState } from './support';
+import {
+    createIsolated, dropIsolated, seedManagers, seedPlayers, sleep, configure, currentBackend, getState
+} from './support';
 
-const execute = promisify(execFile);
 const session = `pancake-import-${randomBytes(6).toString('hex')}`;
 async function browser(...args: string[]) {
-    return (await execute('agent-browser', ['--session', session, ...args], { timeout: 20000 })).stdout.trim();
+    return runBrowser(session,args,20000);
 }
 async function visible(selector: string, text: string) {
     const query = `document.querySelector(${JSON.stringify(selector)})`;
@@ -25,8 +29,8 @@ async function visible(selector: string, text: string) {
     return false;
 }
 async function freePort() {
-    const listener = createServer();
-    await new Promise<void>(resolve => listener.listen(0, '127.0.0.1', resolve));
+    const listener = ownServer(createServer());
+    await listen(listener, 0, '127.0.0.1');
     const address = listener.address();
     assert(address && typeof address === 'object');
     await new Promise<void>(resolve => listener.close(() => resolve()));
@@ -55,9 +59,9 @@ async function main() {
         await seedPlayers(buildPool(raw).players);
         await configure({ draft: { nominationMs: 600000, biddingMs: 600000 } });
         const port = await freePort();
-        server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '-p', String(port)], {
+        server = ownProcess(spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '-p', String(port)], {
             env: { ...process.env, CONVEX_URL: currentBackend().url }, stdio: ['ignore', 'pipe', 'pipe']
-        });
+        }));
         server.stdout!.on('data', data => { serverLog += String(data); });
         server.stderr!.on('data', data => { serverLog += String(data); });
         const base = `http://127.0.0.1:${port}`;
@@ -160,4 +164,4 @@ async function main() {
         }
     }
 }
-main().catch(error => { console.error(safeError(error)); process.exitCode = 1; });
+withResources(main).catch(error => { console.error(safeError(error)); process.exitCode = 1; });
