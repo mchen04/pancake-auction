@@ -1,8 +1,10 @@
 import { v } from 'convex/values';
 export const placement = v.union(v.literal('active'), v.literal('taxi'), v.literal('ir'));
 export const action = v.union(
-    v.object({ type: v.literal('start') }), v.object({ type: v.literal('pause') }),
-    v.object({ type: v.literal('resume') }), v.object({ type: v.literal('undo'), lotId: v.number() }),
+    v.object({ type: v.literal('start') }),
+    v.object({ type: v.literal('pause'), expectedRunning: v.optional(v.string()) }),
+    v.object({ type: v.literal('resume'), expectedPause: v.optional(v.string()) }),
+    v.object({ type: v.literal('undo'), lotId: v.number() }),
     v.object({ type: v.literal('done'), done: v.boolean(), nominationGeneration: v.optional(v.string()) }),
     v.object({ type: v.literal('nominate'), playerId: v.string(), amount: v.number(),
         nominationGeneration: v.optional(v.string()) }),

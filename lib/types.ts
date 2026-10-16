@@ -35,6 +35,7 @@ export interface Draft {
     status: "setup" | "running" | "paused" | "complete";
     nominationGeneration: string;
     turnSequence?: number;
+    controlGeneration?: string;
     phase: "nomination" | "bidding";
     order: number[];
     turnIndex: number;
@@ -80,7 +81,13 @@ export interface AuctionState {
     me: number | null;
 }
 export type Action = {
-    type: "start" | "pause" | "resume";
+    type: "start";
+} | {
+    type: "pause";
+    expectedRunning?: string;
+} | {
+    type: "resume";
+    expectedPause?: string;
 } | {
     type: "undo";
     lotId: number;

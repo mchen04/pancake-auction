@@ -32,7 +32,13 @@ export class AuctionClient {
             this.transport.mutation(api.auction.restoreSeat, { token }, { skipQueue: true })));
     }
     async act(action: Action, token = '') {
+        if (action.type === 'pause' && action.expectedRunning === undefined) {
+            action = { ...action, expectedRunning: (await this.state(token)).draft.controlGeneration };
+        } else if (action.type === 'resume' && action.expectedPause === undefined) {
+            action = { ...action, expectedPause: (await this.state(token)).draft.controlGeneration };
+        }
+        const intent = action;
         return unwrap(await retryAbortedMutation(() =>
-            this.transport.mutation(api.auction.actOnDraft, { token, action }, { skipQueue: true })));
+            this.transport.mutation(api.auction.actOnDraft, { token, action: intent }, { skipQueue: true })));
     }
 }

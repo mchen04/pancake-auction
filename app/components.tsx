@@ -849,7 +849,9 @@ function undoLabel(state: AuctionState) {
   return last ? `Undo ${findPlayer(state, last.playerId)?.name ?? last.playerId} ${dollars(last.highBid)}?` : 'Undo?';
 }
 
-export function CommissionerBar({ state, busy, send }: RoomProps) {
+export function CommissionerBar({ state, busy, connected, send, pendingControl }: RoomProps & {
+  pendingControl?: 'pause' | 'resume' | null;
+}) {
   const d = state.draft;
   if (d.status === 'setup' || d.status === 'complete') {
     return d.status === 'complete' && state.sales.length ? (
@@ -870,9 +872,14 @@ export function CommissionerBar({ state, busy, send }: RoomProps) {
         disabled={busy || !state.lot} title="Sell now to the high bidder"
         onConfirm={() => state.lot && void send({ type: 'force', lotId: state.lot.id,
           expectedHighBidderId: state.lot.highBidderId, expectedHighBid: state.lot.highBid })} />
-      <button className="secondary small" disabled={busy}
-        onClick={() => void send({ type: d.status === 'paused' ? 'resume' : 'pause' })}>
-        {d.status === 'paused' ? 'Resume' : 'Pause'}
+      <button className="secondary small" disabled={busy || !connected} aria-busy={Boolean(pendingControl)}
+        title={!connected ? 'Reconnecting…' : undefined}
+        aria-describedby={!connected ? 'room-connection-status' : undefined}
+        onClick={() => void send(d.status === 'paused'
+          ? { type: 'resume', expectedPause: d.controlGeneration }
+          : { type: 'pause', expectedRunning: d.controlGeneration })}>
+        {pendingControl === 'resume' ? 'Resuming…' : pendingControl === 'pause' ? 'Pausing…'
+          : d.status === 'paused' ? 'Resume' : 'Pause'}
       </button>
     </div>
   );

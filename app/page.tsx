@@ -28,6 +28,7 @@ export default function Room() {
   const connected = connection.isWebSocketConnected;
   const [connectionTimedOut, setConnectionTimedOut] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [pendingControl, setPendingControl] = useState<'pause' | 'resume' | null>(null);
   const clock = useClockOffset(connected, connection.connectionCount);
   const [tab, setTab] = useState<Tab>('players');
   const [opening, setOpening] = useState(1);
@@ -79,6 +80,7 @@ export default function Room() {
     if (pending.current) return;
     pending.current = true;
     setBusy(true);
+    if ('type' in body && (body.type === 'pause' || body.type === 'resume')) setPendingControl(body.type);
     setError('');
     if ('type' in body && body.type === 'nominate') {
       setOpening(body.amount);
@@ -98,6 +100,7 @@ export default function Room() {
       setError(failure instanceof Error ? failure.message : 'Request failed');
     } finally {
       setBusy(false);
+      setPendingControl(null);
       pending.current = false;
     }
   }, [claim, mutate, token]);
@@ -146,13 +149,13 @@ export default function Room() {
       <header className="topbar">
         <h1 className="wordmark">Pancake Auction</h1>
         <p className={`headline ${state.draft.status}`}>{headline(state, me)}</p>
-        {!connected && <p className="offline" role="status">Reconnecting…</p>}
+        {!connected && <p className="offline" id="room-connection-status" role="status">Reconnecting…</p>}
         {(clock.status === 'syncing' || clock.status === 'retrying') && (
           <p className="offline clock-status" role="status">
             {clock.status === 'retrying' ? 'Clock not synced. Retrying…' : 'Syncing clock…'}
           </p>
         )}
-        {me.commissioner && <CommissionerBar {...props} />}
+        {me.commissioner && <CommissionerBar {...props} pendingControl={pendingControl} />}
         <p className="me">{me.name}</p>
       </header>
       {error && <div className="toast" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss">×</button></div>}

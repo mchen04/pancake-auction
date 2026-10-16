@@ -36,6 +36,7 @@ export async function load(ctx: QueryCtx, token?: string, includePool = true, fu
     const managers = await ctx.db.query('managers').withIndex('id').collect();
     const hash = token && /^[a-f0-9]{64}$/.test(token) ? await tokenHash(token) : null;
     const draft: Draft = record ? { ...record.value,
+        controlGeneration: `${record._id}:${record.controlSequence ?? 0}`,
         turnSequence: record.turnSequence ?? record.value.turnSequence ?? 0,
         nominationGeneration: record.value.nominationGeneration ?? `${record._id}:0` } : initialDraft();
     const latest = await ctx.db.query('imports').order('desc').first();
@@ -68,11 +69,16 @@ export class Store {
     nextEvent: number;
     nominationSequence: number;
     turnSequence: number;
+    controlSequence: number;
     constructor(public ctx: MutationCtx, public record: Doc<'drafts'>) {
         this.nextLot = record.nextLot;
         this.nextEvent = record.nextEvent;
         this.nominationSequence = record.nominationSequence ?? 0;
         this.turnSequence = record.turnSequence ?? record.value.turnSequence ?? 0;
+        this.controlSequence = record.controlSequence ?? 0;
+    }
+    renewControl(s: AuctionState) {
+        s.draft.controlGeneration = `${this.record._id}:${++this.controlSequence}`;
     }
     renewNomination(s: AuctionState) {
         this.nominationSequence++;
@@ -103,7 +109,7 @@ export class Store {
         const version = this.record.version + 1;
         await this.ctx.db.patch(this.record._id, { value: s.draft, version,
             nextLot: this.nextLot, nextEvent: this.nextEvent, nominationSequence: this.nominationSequence,
-            turnSequence: this.turnSequence });
+            turnSequence: this.turnSequence, controlSequence: this.controlSequence });
         if (s.draft.status === 'running' && s.draft.deadline !== null) {
             await this.ctx.scheduler.runAt(s.draft.deadline, internal.auction.expire,
                 { draftId: this.record._id, lotId: s.draft.lotId, version, deadline: s.draft.deadline });
@@ -336,7 +342,11 @@ function requireCurrentPage(action: WireAction, s: AuctionState) {
         && turnBound(action, s) && action.nominationGeneration === undefined;
     const missingForceTarget = action.type === 'force'
         && (action.expectedHighBidderId === undefined || action.expectedHighBid === undefined);
-    if (missingGeneration || missingForceTarget) throw new RuleError('Refresh the page to continue', 409);
+    const missingControl = action.type === 'resume' && action.expectedPause === undefined
+        || action.type === 'pause' && action.expectedRunning === undefined;
+    if (missingGeneration || missingForceTarget || missingControl) {
+        throw new RuleError('Refresh the page to continue', 409);
+    }
 }
 export async function act(ctx: MutationCtx, action: WireAction, token: string) {
     return transaction(ctx, token, async (client, s, now) => {
@@ -376,9 +386,11 @@ export async function act(ctx: MutationCtx, action: WireAction, token: string) {
                 [d.order[i], d.order[j]] = [d.order[j], d.order[i]];
             }
             d.status = "running";
+            client.renewControl(s);
             d.passedTurns = [];
             d.completionReason = null;
             await event(client, "start", m.id, null, {
+                controlGeneration: d.controlGeneration,
                 order: d.order,
                 timing: {
                     nominationMs: d.nominationMs,
@@ -423,6 +435,7 @@ export async function act(ctx: MutationCtx, action: WireAction, token: string) {
             d.deadline = null;
             d.remainingMs = d.nominationMs;
             client.renewTurn(s);
+            client.renewControl(s);
             await event(client, "undo", m.id, undone.id, {
                 playerId: undone.playerId,
                 winnerId: undone.highBidderId,
@@ -431,34 +444,45 @@ export async function act(ctx: MutationCtx, action: WireAction, token: string) {
                 voidLotId: s.lot?.id ?? null,
                 nominatorId: undone.nominatorId,
                 nominationGeneration: d.nominationGeneration,
+                controlGeneration: d.controlGeneration,
                 remainingMs: d.remainingMs
             }, now);
             return;
         }
         if (action.type === "pause") {
+            if (action.expectedRunning !== d.controlGeneration) {
+                throw new RuleError('The draft has resumed again. Check before pausing.', 409);
+            }
             if (d.status !== "running") {
                 throw new RuleError("Draft is not running", 409);
             }
             d.remainingMs = Math.max(0, (d.deadline ?? now) - now);
             d.deadline = null;
             d.status = "paused";
+            client.renewControl(s);
             client.renewNomination(s);
             await event(client, "pause", m.id, d.lotId, {
                 remainingMs: d.remainingMs,
+                controlGeneration: d.controlGeneration,
                 nominationGeneration: d.nominationGeneration
             }, now);
             return;
         }
         if (action.type === "resume") {
+            if (action.expectedPause !== d.controlGeneration) {
+                throw new RuleError('The draft was paused again. Check before resuming.', 409);
+            }
             if (d.status !== "paused") {
                 throw new RuleError("Draft is not paused", 409);
             }
             d.status = "running";
+            client.renewControl(s);
             d.deadline = now + (d.remainingMs ?? 0);
             d.remainingMs = null;
             client.renewNomination(s);
             await event(client, "resume", m.id, d.lotId, {
                 deadline: d.deadline,
+                controlGeneration: d.controlGeneration,
                 nominationGeneration: d.nominationGeneration
             }, now);
             await advance(client, s, now);
