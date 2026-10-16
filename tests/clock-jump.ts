@@ -141,6 +141,53 @@ async function main() {
                 return { before,jumped,reversed,toleranceSeconds:0.3 };
             });
         }
+        await check('Lifecycle returns keep the countdown visible and cannot starve fresh samples', async () => {
+            await open(0); await synchronized();
+            delayMs = 100;
+            const state = await getState();
+            const proof = await evaluate<{
+                ticks: { shown: string; status: string; syncing: boolean; error: number }[];
+                acceptedBefore: number; acceptedDuring: number; acceptedAfter: number;
+                events: Record<string, number>;
+            }>(`new Promise(resolve => {
+                const ticks=[],events={},acceptedBefore=window.clockNetwork.accepted.length;
+                let visibility='visible',index=0;
+                Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>visibility});
+                const record=()=>{
+                    const shown=document.querySelector('.shot-clock .digits').textContent;
+                    const actual=Math.max(0,(${state.draft.deadline}-window.clockNetwork.nativeNow())/1000);
+                    ticks.push({shown,status:document.querySelector('.room').dataset.clockStatus,
+                        syncing:document.body.textContent.includes('Syncing clock'),
+                        error:Math.abs(Number(shown)-actual)});
+                };
+                const fire=(target,name)=>{events[name]=(events[name]??0)+1;target.dispatchEvent(new Event(name));};
+                const returns=[()=>fire(window,'focus'),()=>{fire(window,'blur');fire(window,'focus');},
+                    ()=>{visibility='hidden';fire(document,'visibilitychange');visibility='visible';
+                        fire(document,'visibilitychange');},()=>fire(window,'pageshow'),()=>fire(document,'resume')];
+                const observer=new MutationObserver(record);
+                observer.observe(document.querySelector('.room'),{subtree:true,childList:true,characterData:true});
+                const polling=setInterval(record,25);
+                const storm=setInterval(()=>returns[index++%returns.length](),50);
+                returns[0]();
+                setTimeout(()=>{
+                    clearInterval(storm);
+                    const acceptedDuring=window.clockNetwork.accepted.length;
+                    setTimeout(()=>{clearInterval(polling);observer.disconnect();record();
+                        delete document.visibilityState;
+                        resolve({ticks,events,acceptedBefore,acceptedDuring,
+                            acceptedAfter:window.clockNetwork.accepted.length});},350);
+                },1500);
+            })`);
+            await writeFile(`${evidence}/lifecycle.json`, JSON.stringify(proof, null, 2));
+            await browser('screenshot', `${evidence}/lifecycle.png`);
+            assert(proof.ticks.length >= 50);
+            assert(proof.ticks.every(tick => tick.shown !== '--'), 'Tab returns must keep the accepted anchor visible');
+            assert(proof.ticks.every(tick => !tick.syncing), 'Tab returns must not flash the syncing header');
+            assert(proof.ticks.every(tick => tick.error <= 0.3), JSON.stringify(proof));
+            assert(proof.acceptedDuring > proof.acceptedBefore, 'A fresh sample must land during repeated events');
+            assert(['focus','blur','visibilitychange','pageshow','resume'].every(name => proof.events[name] >= 3));
+            return proof;
+        });
         await check('C24 a lower-RTT ordinary sample replaces the accepted anchor', async () => {
             await open(0); await synchronized();
             const before = await evaluate<number>('window.clockNetwork.accepted.length');
@@ -156,15 +203,15 @@ async function main() {
         });
         await check('C24 visibility wake refreshes a monotonic clock paused during sleep', async () => {
             await open(0); await synchronized(); delayMs=0;
-            const count=await evaluate<number>('window.clockNetwork.responses');
+            const count=await evaluate<number>('window.clockNetwork.accepted.length');
             await evaluate('window.clockNetwork.freeze();true'); await sleep(1200);
             await evaluate("window.clockNetwork.wake();document.dispatchEvent(new Event('visibilitychange'));true");
             for(let i=0;i<100;i++) {
-                if(await evaluate<boolean>(`window.clockNetwork.responses>${count}
+                if(await evaluate<boolean>(`window.clockNetwork.accepted.length>${count}
                     &&['synced','provisional'].includes(document.querySelector('.room').dataset.clockStatus)`))break;
                 await sleep(50);
             }
-            assert(await evaluate<boolean>(`window.clockNetwork.responses>${count}`));
+            assert(await evaluate<boolean>(`window.clockNetwork.accepted.length>${count}`));
             const proof=await ticks(); accurate(proof);
             return {proof,accepted:await evaluate('window.clockNetwork.accepted')};
         });

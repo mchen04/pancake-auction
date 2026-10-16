@@ -14,12 +14,15 @@ export class ClockSamples {
     private bestAt = -Infinity;
     private accepted: ClockSample | null = null;
     private needsWarmup = true;
+    get hasSample() { return this.accepted !== null; }
     get provisional() { return this.bestRtt > preferredClockRttMs; }
-    reset() {
+    reset(keepAccepted = false) {
         this.acceptedSequence = ++this.sequence;
-        this.bestRtt = Infinity;
-        this.bestAt = -Infinity;
-        this.accepted = null;
+        if (!keepAccepted) {
+            this.bestRtt = Infinity;
+            this.bestAt = -Infinity;
+            this.accepted = null;
+        }
         this.needsWarmup = true;
     }
     begin(monotonic = performance.now(), wall = Date.now()): ClockRequest {

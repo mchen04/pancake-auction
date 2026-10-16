@@ -14,14 +14,14 @@ export function useClockOffset(connected: boolean, connectionCount: number) {
     useEffect(() => {
         if (!connected) return;
         let cancelled = false;
-        let generation = 0;
-        let synchronized = false;
+        let synchronized = samples.hasSample;
+        let pendingSamples = 0;
+        let sampling = false;
         let retryDelay = 1000;
         let timer: ReturnType<typeof setTimeout>;
         const controllers = new Set<AbortController>();
-        const current = (epoch: number) => !cancelled && epoch === generation;
-        async function sample(epoch: number) {
-            if (!current(epoch)) return;
+        async function sample() {
+            if (cancelled) return;
             const request = samples.begin();
             const controller = new AbortController();
             controllers.add(controller);
@@ -30,7 +30,7 @@ export function useClockOffset(connected: boolean, connectionCount: number) {
                 fetch(input, { ...init, signal: controller.signal }) });
             try {
                 const result = await http.mutation(api.auction.syncTime, {}, { skipQueue: true });
-                if (!current(epoch)) return;
+                if (cancelled) return;
                 const accepted = samples.accept(request, result.serverNow);
                 if (accepted !== null) {
                     synchronized = true;
@@ -38,48 +38,48 @@ export function useClockOffset(connected: boolean, connectionCount: number) {
                     setClock({ sample: accepted, status: samples.provisional ? 'provisional' : 'synced' });
                 }
             } catch {
-                if (current(epoch) && !synchronized) setClock(previous => ({ ...previous, status: 'retrying' }));
+                if (!cancelled && !synchronized) setClock(previous => ({ ...previous, status: 'retrying' }));
             } finally {
                 clearTimeout(timeout);
                 controllers.delete(controller);
             }
         }
-        function schedule(epoch: number) {
-            if (!current(epoch)) return;
+        function schedule() {
+            if (cancelled) return;
             if (!synchronized) setClock(previous => ({ ...previous, status: 'retrying' }));
             const delay = synchronized ? 15000 : retryDelay;
             retryDelay = Math.min(15000, retryDelay * 2);
-            timer = setTimeout(() => { void repeat(epoch); }, delay);
+            timer = setTimeout(() => refresh(), delay);
         }
-        async function repeat(epoch: number) {
-            await sample(epoch);
-            schedule(epoch);
+        async function drain() {
+            sampling = true;
+            try {
+                while (pendingSamples > 0 && !cancelled) {
+                    pendingSamples--;
+                    await sample();
+                }
+            } finally {
+                sampling = false;
+                schedule();
+            }
         }
-        async function initialize(epoch: number) {
-            for (let index = 0; index < 3 && current(epoch); index++) await sample(epoch);
-            schedule(epoch);
-        }
-        function refresh(clearAnchor = true) {
+        function refresh(count = 1) {
             if (cancelled) return;
-            const epoch = ++generation;
             clearTimeout(timer);
-            for (const controller of controllers) controller.abort();
-            samples.reset();
-            synchronized = false;
-            retryDelay = 1000;
-            setClock(previous => ({ sample: clearAnchor ? null : previous.sample, status: 'syncing' }));
-            void initialize(epoch);
+            pendingSamples = Math.max(pendingSamples, count);
+            if (!sampling) void drain();
         }
         const wake = () => refresh();
         const visible = () => { if (document.visibilityState === 'visible') wake(); };
         let previousWall = Date.now(), previousMonotonic = performance.now();
         const heartbeat = setInterval(() => {
             const wall = Date.now(), monotonic = performance.now();
-            if (Math.abs(wall - previousWall - monotonic + previousMonotonic) > 1000) refresh(false);
+            if (Math.abs(wall - previousWall - monotonic + previousMonotonic) > 1000) refresh();
             previousWall = wall;
             previousMonotonic = monotonic;
         }, 1000);
-        refresh();
+        samples.reset(true);
+        refresh(3);
         window.addEventListener('focus', wake);
         window.addEventListener('pageshow', wake);
         document.addEventListener('visibilitychange', visible);

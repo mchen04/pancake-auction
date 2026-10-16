@@ -60,6 +60,17 @@ describe('C20 bounded independent clock samples', () => {
         expect(samples.accept(samples.begin(30, 30),1035,40, 40)).toBeNull();
         expect(samples.accept(samples.begin(50, 50),1055,60, 60)).not.toBeNull();
     });
+    it('keeps the accepted anchor and rank when reconnect invalidates pending requests', () => {
+        const samples = warmedSamples();
+        const anchor = samples.accept(samples.begin(0, 0), 1005, 10, 10)!;
+        const pending = samples.begin(20, 20);
+        samples.reset(true);
+        expect(samples.hasSample).toBe(true);
+        expect(estimatedServerTime(anchor, 30)).toBe(1030);
+        expect(samples.accept(pending, 1030, 40, 40)).toBeNull();
+        expect(samples.accept(samples.begin(50, 50), 1055, 60, 60)).toBeNull();
+        expect(samples.accept(samples.begin(70, 70), 1075, 80, 80)).not.toBeNull();
+    });
     it('C24 forward and backward wall jumps cannot change an accepted estimate', () => {
         const samples=warmedSamples();
         const sample=samples.accept(samples.begin(0, 0),1050,100, 100)!;
