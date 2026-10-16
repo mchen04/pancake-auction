@@ -67,6 +67,25 @@ async function main() {
         await evaluate('(()=>{transport.blocked=false;for(const s of transport.sockets)s.close();return true})()');
         await until(() => evaluate('!document.querySelector(".offline:not(.clock-status)")'));
     };
+    await check('queued native Resume after another Resume reports not paused', async proof => {
+        const observed = await http.state();
+        await until(() => evaluate('pauseControl.state?.draft.controlGeneration==='
+            + JSON.stringify(observed.draft.controlGeneration)));
+        await disconnect();
+        await evaluate('pauseControl.queue("resume");true');
+        await http.act({ type: 'resume' }, token);
+        const before = await http.state();
+        await reconnect(); await until(() => evaluate('queuedResult!==null'));
+        proof.result = await evaluate('queuedResult');
+        const after = await http.state();
+        proof.before = before.draft; proof.after = after.draft;
+        assert.deepEqual(after.draft, before.draft);
+        assert.deepEqual(after.managers, before.managers);
+        assert.deepEqual(after.roster, before.roster);
+        assert.equal((proof.result as { status: number }).status, 409);
+        assert.equal((proof.result as { error: string }).error, 'Draft is not paused');
+    });
+    if ((await http.state()).draft.status === 'running') await http.act({ type: 'pause' }, token);
     await check('C44 queued native Resume rejects a newer pause', async proof => {
         await disconnect();
         proof.offline = await evaluate(`(()=>{const b=document.querySelector('${button}');return {
@@ -103,6 +122,25 @@ async function main() {
         assert.equal(after.draft.turnSequence, before.draft.turnSequence);
     });
     await evaluate('(()=>{transport.holdActions=false;for(const send of transport.held.splice(0))send();return true})()');
+    await check('queued native Pause after another Pause reports not running', async proof => {
+        const observed = await http.state();
+        await until(() => evaluate('pauseControl.state?.draft.controlGeneration==='
+            + JSON.stringify(observed.draft.controlGeneration)));
+        await disconnect();
+        await evaluate('pauseControl.queue("pause");true');
+        await http.act({ type: 'pause' }, token);
+        const before = await http.state();
+        await reconnect(); await until(() => evaluate('queuedResult!==null'));
+        proof.result = await evaluate('queuedResult');
+        const after = await http.state();
+        proof.before = before.draft; proof.after = after.draft;
+        assert.deepEqual(after.draft, before.draft);
+        assert.deepEqual(after.managers, before.managers);
+        assert.deepEqual(after.roster, before.roster);
+        assert.equal((proof.result as { status: number }).status, 409);
+        assert.equal((proof.result as { error: string }).error, 'Draft is not running');
+    });
+    if ((await http.state()).draft.status === 'paused') await http.act({ type: 'resume' }, token);
     await check('C44 queued native Pause cannot stop a newer running interval', async proof => {
         await disconnect();
         proof.disabled = await evaluate(`document.querySelector('${button}').disabled`);

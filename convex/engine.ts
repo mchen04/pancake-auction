@@ -450,11 +450,11 @@ export async function act(ctx: MutationCtx, action: WireAction, token: string) {
             return;
         }
         if (action.type === "pause") {
-            if (action.expectedRunning !== d.controlGeneration) {
-                throw new RuleError('The draft has resumed again. Check before pausing.', 409);
-            }
             if (d.status !== "running") {
                 throw new RuleError("Draft is not running", 409);
+            }
+            if (action.expectedRunning !== d.controlGeneration) {
+                throw new RuleError('The draft has resumed again. Check before pausing.', 409);
             }
             d.remainingMs = Math.max(0, (d.deadline ?? now) - now);
             d.deadline = null;
@@ -469,11 +469,11 @@ export async function act(ctx: MutationCtx, action: WireAction, token: string) {
             return;
         }
         if (action.type === "resume") {
-            if (action.expectedPause !== d.controlGeneration) {
-                throw new RuleError('The draft was paused again. Check before resuming.', 409);
-            }
             if (d.status !== "paused") {
                 throw new RuleError("Draft is not paused", 409);
+            }
+            if (action.expectedPause !== d.controlGeneration) {
+                throw new RuleError('The draft was paused again. Check before resuming.', 409);
             }
             d.status = "running";
             client.renewControl(s);
