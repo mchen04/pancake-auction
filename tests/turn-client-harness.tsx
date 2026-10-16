@@ -11,8 +11,15 @@ const host = window as unknown as { initial: AuctionState; config: { token: stri
     replace: (change: Partial<AuctionState>) => void; actions: Action[]; control: typeof control };
 const nativeNow = Date.now.bind(Date);
 const nativeFetch = window.fetch.bind(window);
-const control = { sockets: [] as WebSocket[], transitions: 0, delay: 0, requests: {} as Record<number, string>,
+const clicks: unknown[] = [];
+const control = { clicks, sockets: [] as WebSocket[], transitions: 0, delay: 0, requests: {} as Record<number, string>,
     events: [] as { type: string; path?: string; at: number; serverNow?: number }[], nativeNow };
+for (const type of ['pointerdown', 'click']) document.addEventListener(type, event => {
+    if (!(event instanceof MouseEvent)) return;
+    const target = event.target instanceof Element ? event.target.closest('button') : null;
+    clicks.push({ type, target: target?.textContent, x: event.clientX, y: event.clientY, scrollY,
+        tab: document.querySelector<HTMLElement>('.room')?.dataset.tab, at: nativeNow() });
+}, true);
 host.control = control;
 host.actions = [];
 if (host.config.skew) Date.now = () => nativeNow() + host.config.skew;

@@ -8,7 +8,7 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { createIsolated, dropIsolated, seedManagers, seedPlayers, claimSeat,
-    currentBackend, currentClient, getState, sleep, syntheticPool, configure } from './support';
+    currentBackend, currentClient, getState, sleep, syntheticPool } from './support';
 
 
 const execute = promisify(execFile);
@@ -31,6 +31,13 @@ async function check(name: string, run: () => Promise<unknown>) {
     try { const proof = await run(); results.push({ name, result: 'passed', proof }); console.log(`PASS ${name}`); }
     catch (error) {
         results.push({ name, result: 'failed', error: String(error) }); console.log(`FAIL ${name}: ${error}`);
+        const observed = await evaluate(`({tab:document.querySelector('.room')?.dataset.tab,
+            focused:document.activeElement?.textContent?.slice(0,100),scrollY,
+            clicks:window.control?.clicks,buttons:[...document.querySelectorAll('.tabbar button')]
+                .map(button=>({text:button.textContent,selected:button.getAttribute('aria-selected'),
+                    bounds:button.getBoundingClientRect().toJSON()}))})`).catch(String);
+        await writeFile(`${process.env.EVIDENCE_DIR}/opening-bid/failure-${results.length}.json`,
+            JSON.stringify({ error:String(error),observed,state:await getState() },null,2));
     }
 }
 async function main() {
@@ -41,7 +48,6 @@ async function main() {
     const isolated = await createIsolated('test');
     await seedManagers(); await seedPlayers(syntheticPool());
     assert.equal((await getState()).draft.nominationMs, 10000);
-    await configure({ draft: { nominationMs: 60000 } });
     const commissionerToken = await claimSeat(1);
     const otherToken = await claimSeat(2);
     let token = commissionerToken;
@@ -49,13 +55,17 @@ async function main() {
     for(let id=3;id<=10;id++)tokens.set(id,await claimSeat(id));
     let initial = await getState();
     const skew = 0;
+    const css = ':root{--font-display:Arial;--font-body:Arial}' + await readFile('app/globals.css', 'utf8');
     const server = ownServer(createServer(async (request, response) => {
         if (request.url === '/bundle.js') {
             response.setHeader('Content-Type', 'text/javascript');
             response.end(await readFile(`${evidence}/bundle.js`));
+        } else if (request.url === '/style.css') {
+            response.setHeader('Content-Type', 'text/css'); response.end(css);
         } else {
             response.setHeader('Content-Type', 'text/html; charset=utf-8');
-            response.end('<!doctype html><html><body><div id="root"></div><script>window.initial='
+            response.end('<!doctype html><html><head><meta name="viewport" content="width=device-width">'
+                + '<link rel="stylesheet" href="/style.css"></head><body><div id="root"></div><script>window.initial='
                 + JSON.stringify(initial) + ';window.config='
                 + JSON.stringify({ token, url: currentBackend().url, skew })
                 + '</script><script src="/bundle.js"></script></body></html>');
@@ -65,6 +75,7 @@ async function main() {
     const address = server.address();
     assert(address && typeof address !== 'string');
     const open = async (mode = 'components') => {
+        await browser('set', 'viewport', '390', '844');
         await browser('open', `http://127.0.0.1:${address.port}/?mode=${mode}`);
         await browser('wait', mode === 'room' ? '.room' : '.commish');
     };
@@ -79,6 +90,19 @@ async function main() {
             first=await getState();
             await currentClient().act({type:'force',lotId:first.lot!.id,
                 expectedHighBidderId:first.lot!.highBidderId,expectedHighBid:first.lot!.highBid},commissionerToken);
+            let waiting = await getState();
+            while (waiting.draft.nominatorId !== 2) {
+                const player = waiting.players.find(player => !waiting.roster.some(entry => entry.playerId === player.id))!;
+                const nextToken = tokens.get(waiting.draft.nominatorId!)!;
+                await currentClient().act({ type:'nominate',playerId:player.id,amount:1,
+                    nominationGeneration:waiting.draft.nominationGeneration },nextToken);
+                waiting = await getState();
+                await currentClient().act({ type:'bid',lotId:waiting.lot!.id,amount:2 },otherToken);
+                waiting = await getState();
+                await currentClient().act({ type:'force',lotId:waiting.lot!.id,
+                    expectedHighBidderId:waiting.lot!.highBidderId,expectedHighBid:waiting.lot!.highBid },commissionerToken);
+                waiting = await getState();
+            }
             await currentClient().act({type:'pause'},commissionerToken);
             const started=await getState();
             token=tokens.get(started.draft.nominatorId!)!;
@@ -97,8 +121,16 @@ async function main() {
                 serverNow: interactive.serverNow, delay, events: interactive.recentEvents }, null, 2));
             assert.equal(interactive.draft.phase, 'nomination');
             assert.equal(interactive.draft.nominatorId, started.draft.nominatorId);
+            const geometry = await evaluate<{ height: number; viewport: number; scroll: number }>(`({
+                height:Math.max(document.body.scrollHeight,document.documentElement.scrollHeight),
+                viewport:innerHeight,scroll:scrollY})`);
+            assert(geometry.height <= geometry.viewport); assert.equal(geometry.scroll, 0);
             await browser('click','.tabbar button:nth-child(4)');
             await until(`document.querySelector('.room').dataset.tab==='results'`);
+            const click = await evaluate<{ target: string; x: number; y: number }>(
+                `window.control.clicks.filter(event=>event.type==='click').at(-1)`);
+            assert.equal(click.target, 'Results'); assert(click.y >= 0 && click.y <= geometry.viewport);
+            await writeFile(`${evidence}/tab-click.json`, JSON.stringify({ geometry, click }));
             await browser('fill','input[aria-label="Opening bid"]','25');
             const read=()=>evaluate<{text:string;title:string;tab:string;focused:boolean}>(`({
                 text:document.querySelector('input[aria-label="Opening bid"]').value,
