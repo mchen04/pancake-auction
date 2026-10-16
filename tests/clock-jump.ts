@@ -124,7 +124,7 @@ async function main() {
             const reversal = await ticks(); accurate(reversal);
             return { stable, reversal, toleranceSeconds:0.3 };
         });
-        for (const jump of [30000,-30000]) {
+        for (const jump of [-30000]) {
             await check(`C24 ${jump>0?'forward':'backward'} 30-second jump needs no new sample`, async () => {
                 await open(0); await synchronized();
                 const before = await ticks(700); accurate(before);
@@ -141,6 +141,89 @@ async function main() {
                 return { before,jumped,reversed,toleranceSeconds:0.3 };
             });
         }
+        await check('C27 forward wall jumps hide uncertain digits until a fresh sample arrives', async () => {
+            await open(0); await synchronized(); blocked = true;
+            await evaluate('window.config.skew=30000;true');
+            await sleep(1100);
+            const uncertain = await evaluate<{ shown: string; status: string; message: string | null }>(`({shown:document.querySelector('.shot-clock .digits').textContent,
+                status:document.querySelector('.room').dataset.clockStatus,
+                message:document.querySelector('.clock-status')?.textContent??null})`);
+            await writeFile(`${evidence}/forward-uncertain.json`, JSON.stringify(uncertain));
+            assert.equal(uncertain.shown, '--');
+            assert.equal(uncertain.status, 'retrying');
+            assert.equal(uncertain.message, 'Clock not synced. Retrying…');
+            blocked = false; delayMs = 0;
+            await synchronized();
+            const recovered = await ticks(600); accurate(recovered);
+            blocked = true;
+            await evaluate('window.config.skew=0;true');
+            const reversed = await ticks(600); accurate(reversed);
+            return { uncertain, recovered, reversed, policy: 'A forward wall jump can also be sleep; wait for HTTP time' };
+        });
+        await check('C27 clock HTTP failure without suspension keeps accurate confident digits', async () => {
+            await open(0); await synchronized(); blocked = true;
+            await evaluate("window.dispatchEvent(new Event('focus'));true");
+            const proof = await ticks(900); accurate(proof);
+            assert.equal(await evaluate("document.querySelector('.clock-status')?.textContent??null"), null);
+            return proof;
+        });
+        await check('C27 failed wake hides uncertain digits with a live socket, then recovers', async () => {
+            await open(0); await synchronized(); blocked = true;
+            const responses = await evaluate<number>('window.clockNetwork.responses');
+            await evaluate('window.clockNetwork.freeze();true');
+            await sleep(1600);
+            await evaluate("window.clockNetwork.wake();document.dispatchEvent(new Event('visibilitychange'));true");
+            const wake = await evaluate<number>('window.clockNetwork.nativeNow()');
+            const deadline = (await getState()).draft.deadline!;
+            const readings = await evaluate<{ elapsed: number; shown: string; message: string | null;
+                status: string; connected: boolean; actual: number; error: number | null }[]>(`new Promise(resolve=>{
+                const rows=[];
+                const record=()=>{
+                    const shown=document.querySelector('.shot-clock .digits').textContent;
+                    const actual=Math.max(0,(${deadline}-window.clockNetwork.nativeNow())/1000);
+                    rows.push({elapsed:window.clockNetwork.nativeNow()-${wake},shown,actual,
+                    error:shown==='--'?null:Math.abs(Number(shown)-actual),
+                    status:document.querySelector('.room').dataset.clockStatus,
+                    message:document.querySelector('.clock-status')?.textContent??null,
+                    connected:!document.body.textContent.includes('Reconnecting…')});};
+                record();const timer=setInterval(record,25);
+                setTimeout(()=>{clearInterval(timer);record();resolve(rows)},4100);
+            })`);
+            const requests=await evaluate<number[]>('window.clockNetwork.requests');
+            await writeFile(`${evidence}/wake-failure.json`, JSON.stringify({ responses, wake, deadline, readings, requests }, null, 2));
+            await browser('screenshot', `${evidence}/wake-failure.png`);
+            assert(readings.some(row => row.shown === '--' && row.elapsed <= 1100));
+            assert(readings.filter(row => row.elapsed >= 1100).every(row => row.shown === '--'
+                && row.message === 'Clock not synced. Retrying…' && row.status === 'retrying'));
+            assert(readings.every(row => row.connected));
+            const retries=requests.filter(at=>at>=wake-1600);
+            assert(retries.length>=2,'An HTTP timeout must not defer recovery for fifteen seconds');
+            assert(retries.slice(1).every((at,index)=>at-retries[index]<=4600));
+            assert.equal(await evaluate('window.clockNetwork.responses'), responses);
+            await configure({ deadlineAfterMs: 9000 });
+            const recoveryStart = Date.now();
+            blocked = false; delayMs = 0;
+            await synchronized();
+            const recoveryMs = Date.now() - recoveryStart;
+            assert(recoveryMs <= 5000);
+            const recovered = await ticks(600); accurate(recovered);
+            return { responses, readings, requests, recovered, recoveryMs,
+                simulation: 'Browser performance.now pauses 1600ms; HTTP times out; native WebSocket stays live' };
+        });
+        await check('C27 heartbeat alone detects suspended monotonic time', async () => {
+            await open(0); await synchronized(); blocked = true;
+            await evaluate('window.clockNetwork.freeze();true');
+            await sleep(1600);
+            await evaluate('window.clockNetwork.wake();true');
+            await sleep(1100);
+            const observed=await evaluate<{shown:string;status:string;connected:boolean}>(`({
+                shown:document.querySelector('.shot-clock .digits').textContent,
+                status:document.querySelector('.room').dataset.clockStatus,
+                connected:!document.body.textContent.includes('Reconnecting…')})`);
+            await writeFile(`${evidence}/heartbeat-wake.json`,JSON.stringify(observed));
+            assert.equal(observed.shown,'--');assert.equal(observed.status,'retrying');assert(observed.connected);
+            return observed;
+        });
         await check('Lifecycle returns keep the countdown visible and cannot starve fresh samples', async () => {
             await open(0); await synchronized();
             delayMs = 100;
