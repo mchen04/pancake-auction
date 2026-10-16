@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { promisify } from 'node:util';
+import { DatabaseSync } from 'node:sqlite';
 
 const execute = promisify(execFile);
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -32,6 +33,21 @@ async function gone(owner: Owner) {
     catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
     const current = await execute('ps', ['-p', String(owner.pid), '-o', 'lstart=']).catch(() => null);
     return Boolean(owner.processStart) && current !== null && current.stdout.trim() !== owner.processStart;
+}
+function retirementMutex(path: string) {
+    let database: DatabaseSync | undefined;
+    try {
+        database = new DatabaseSync(path);
+        database.exec('BEGIN EXCLUSIVE');
+    } catch (error) {
+        database?.close();
+        if (error && typeof error === 'object' && 'errcode' in error && [5, 6].includes(Number(error.errcode))) return;
+        throw error;
+    }
+    return () => {
+        try { database.exec('ROLLBACK'); }
+        finally { database.close(); }
+    };
 }
 export async function preparationLock(cache: string, options: Options = {}) {
     const path = `${cache}/prepare.lock`;
@@ -66,13 +82,25 @@ export async function preparationLock(cache: string, options: Options = {}) {
                     : performance.now() - observed.since >= graceMs;
                 if (abandoned) {
                     const retired = `${path}.retired-${createHash('sha256').update(previous.identity).digest('hex')}`;
-                    try {
-                        await writeFile(`${path}/.retirement`, '', { flag: 'wx' }).catch(error => {
-                            if (error.code !== 'EEXIST') throw error;
-                        });
-                        if ((await snapshot(path))?.identity === previous.identity) await rename(path, retired);
-                    } catch (error) {
-                        if (!['ENOENT', 'EEXIST', 'ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code!)) throw error;
+                    const unlock = retirementMutex(`${cache}/retirement.sqlite`);
+                    if (unlock) {
+                        let moved = false;
+                        try {
+                            if ((await snapshot(path))?.stamp === previous.stamp) {
+                                await writeFile(`${path}/.retirement`, '', { flag: 'wx' }).catch(error => {
+                                    if (error.code !== 'EEXIST') throw error;
+                                });
+                                if ((await snapshot(path))?.identity === previous.identity) {
+                                    await rename(path, retired);
+                                    moved = true;
+                                }
+                            }
+                        } catch (error) {
+                            if (!['ENOENT', 'EEXIST', 'ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code!)) throw error;
+                        } finally {
+                            try { if (moved) await rm(retired, { recursive: true, force: true }); }
+                            finally { unlock(); }
+                        }
                     }
                 }
             }

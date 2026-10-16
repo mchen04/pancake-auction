@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
-import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
+import filesystem from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import { makeEvidenceDirectory, makeEvidenceTemporaryDirectory, writeEvidenceFile } from '../scripts/evidence';
@@ -10,6 +12,20 @@ const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const events: Record<string, unknown>[] = [];
 const modulePath = process.env.PREPARATION_LOCK_MODULE || resolve('scripts/preparation-lock.ts');
 async function worker() {
+    if (process.env.PAUSE_RETIREMENT === '1') {
+        let paused = false;
+        filesystem.rename = new Proxy(filesystem.rename, {
+            async apply(target, receiver, args) {
+                if (!paused && String(args[1]).includes('.retired-')) {
+                    paused = true;
+                    process.send!({ paused: true, pid: process.pid });
+                    await new Promise<void>(resolve => process.once('message', () => resolve()));
+                }
+                return Reflect.apply(target, receiver, args);
+            }
+        });
+        syncBuiltinESMExports();
+    }
     const { preparationLock } = await import(pathToFileURL(modulePath).href);
     const release = await preparationLock(process.argv[3], JSON.parse(process.argv[4]));
     process.send!({ acquired: true, pid: process.pid });
@@ -20,27 +36,32 @@ async function worker() {
         }));
     } finally { await release(); }
 }
-function start(cache: string, waitMs = 700, graceMs = 200) {
+function start(cache: string, waitMs = 700, graceMs = 200, pauseRetirement = false) {
     const child = spawn(process.execPath, ['--import', 'tsx', resolve('tests/preparation-lock.ts'),
         '--worker', cache, JSON.stringify({ waitMs, graceMs, pollMs: 20 })],
-    { env: { PATH: process.env.PATH, NODE_ENV: 'test', PREPARATION_LOCK_MODULE: modulePath },
+    { env: { PATH: process.env.PATH, NODE_ENV: 'test', PREPARATION_LOCK_MODULE: modulePath, PAUSE_RETIREMENT: pauseRetirement ? '1' : '0' },
         stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
     events.push({ action: 'spawn', pid: child.pid, cache, waitMs, graceMs });
     let output = '';
     let acquired = false;
+    let paused = false;
     child.stdout!.on('data', data => { output += data; });
     child.stderr!.on('data', data => { output += data; });
-    child.on('message', () => { acquired = true; events.push({ action: 'acquired', pid: child.pid }); });
+    child.on('message', message => {
+        if (message && typeof message === 'object' && 'paused' in message) paused = true;
+        else acquired = true;
+        events.push({ action: paused && !acquired ? 'paused' : 'acquired', pid: child.pid });
+    });
     const closed = new Promise<number | null>(resolve => child.once('close', (code, signal) => {
         events.push({ action: 'closed', pid: child.pid, code, signal, output });
         resolve(code);
     }));
-    return { child, closed, acquired: () => acquired, output: () => output };
+    return { child, closed, acquired: () => acquired, paused: () => paused, output: () => output };
 }
 type Worker = ReturnType<typeof start>;
 const children: Worker[] = [];
-function owned(cache: string, waitMs?: number, graceMs?: number) {
-    const worker = start(cache, waitMs, graceMs);
+function owned(cache: string, waitMs?: number, graceMs?: number, pauseRetirement = false) {
+    const worker = start(cache, waitMs, graceMs, pauseRetirement);
     children.push(worker);
     return worker;
 }
@@ -68,6 +89,9 @@ async function main() {
         await mkdir(cache);
         try {
             const proof = await work(cache);
+            const retired = (await readdir(cache, { withFileTypes: true }))
+                .filter(entry => entry.isDirectory() && entry.name.includes('.retired-')).map(entry => entry.name);
+            assert.deepEqual(retired, [], 'Successful recovery must remove its retired directory');
             results.push({ name, result: 'passed', proof });
             console.log(`PASS ${name}`);
         } catch (error) {
@@ -128,6 +152,39 @@ async function main() {
             winner.child.send('release');
             assert.equal(await winner.closed, 0);
             return { acquisitions: [first.acquired(), second.acquired()], winnerPid: winner.child.pid };
+        });
+        await check('Retirement cleanup cannot let a delayed retirer remove a live replacement', async cache => {
+            const killed = owned(cache);
+            await until(killed.acquired);
+            await stop(killed.child, 'SIGKILL');
+            const delayed = owned(cache, 1000, 200, true);
+            await until(delayed.paused);
+            const competing = owned(cache, 700);
+            await pause(200);
+            delayed.child.send('continue');
+            await until(() => delayed.acquired() || competing.acquired());
+            const winner = delayed.acquired() ? delayed : competing;
+            const loser = winner === delayed ? competing : delayed;
+            await until(() => loser.child.exitCode !== null || loser.acquired());
+            assert(!loser.acquired(), 'Cleanup must never allow a second live critical section');
+            assert.equal(await loser.closed, 1);
+            winner.child.send('release');
+            assert.equal(await winner.closed, 0);
+            return { delayedPid: delayed.child.pid, winnerPid: winner.child.pid,
+                acquisitions: [delayed.acquired(), competing.acquired()] };
+        });
+        await check('A killed retirement owner releases the mutex for the next recovery', async cache => {
+            const killed = owned(cache);
+            await until(killed.acquired);
+            await stop(killed.child, 'SIGKILL');
+            const retiring = owned(cache, 1000, 200, true);
+            await until(retiring.paused);
+            await stop(retiring.child, 'SIGKILL');
+            const next = owned(cache);
+            await until(next.acquired);
+            next.child.send('release');
+            assert.equal(await next.closed, 0, next.output());
+            return { killedRetirer: retiring.child.pid, recoveredPid: next.child.pid };
         });
         await check('C35 a reused PID does not preserve dead preparation ownership', async cache => {
             await mkdir(`${cache}/prepare.lock`);
