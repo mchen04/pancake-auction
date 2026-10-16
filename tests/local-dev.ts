@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { type ChildProcess } from 'node:child_process';
 import { rm, stat, symlink, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ConvexHttpClient } from 'convex/browser';
 import { makeFunctionReference } from 'convex/server';
 import { api } from '../convex/_generated/api';
@@ -16,42 +17,74 @@ import { runAdmin } from '../scripts/admin-client';
 import { evidenceDirectory } from '../scripts/evidence';
 import { freePort, requireClosedPort, sleep } from '../scripts/local-backend';
 
-async function main() {
+export async function localWorkflow() {
     const root = evidenceDirectory(process.env.EVIDENCE_DIR, true)!;
     await mkdir(root, { recursive: true });
     const directory = await mkdtemp(`${root}/local-workflow-`);
-    ownCleanup(async () => { await rm(directory, { recursive: true, force: true }); });
-    const port = await freePort();
-    const sitePort = await freePort();
-    assert(![3210, 3211, 3100, 3220, 3221, 3917].includes(port));
-    assert(![3210, 3211, 3100, 3220, 3221, 3917].includes(sitePort));
-    const client = new ConvexHttpClient(`http://127.0.0.1:${port}`);
-    const ping = makeFunctionReference<'query'>('smoke:ping');
-    const proof: Record<string, unknown> = { name: 'Documented local command serves and preserves data after restart',
-        port, sitePort, result: 'failed' };
+    const groups: { role: string; child: ChildProcess }[] = [];
+    const ports: number[] = [];
+    const proof: Record<string, unknown> = {
+        name: 'Documented local command serves and preserves data after restart', result: 'failed'
+    };
     let child: ChildProcess | undefined;
-    let frontend: ChildProcess | undefined;
     let log = '';
     let frontendLog = '';
-    const stop = async () => {
-        if (child) await stopOwnedProcess(child);
-        await Promise.all([requireClosedPort(port), requireClosedPort(sitePort)]);
-    };
-    const start = async () => {
-        child = spawnOwnedProcess('npm', ['run', 'backend:local'], { cwd: directory, detached: true,
-            env: { PATH: process.env.PATH, NODE_ENV: 'test', CONVEX_LOCAL_CLOUD_PORT: String(port),
-                CONVEX_LOCAL_SITE_PORT: String(sitePort), CONVEX_LOCAL_BACKEND_VERSION: isolatedBackendVersion },
-            stdio: ['ignore', 'pipe', 'pipe'] }, 'SIGTERM');
-        child.stdout!.on('data', data => { log += String(data); });
-        child.stderr!.on('data', data => { log += String(data); });
-        for (let attempt = 0; attempt < 600; attempt++) {
-            if (child.exitCode !== null) throw new Error(`Documented command exited ${child.exitCode}: ${log}`);
-            try { await client.query(ping, {}); return; } catch { await sleep(250); }
+    const close = ownCleanup(async () => {
+        const errors: unknown[] = [];
+        const closed = [];
+        for (const { role, child } of [...groups].reverse()) {
+            try {
+                await stopOwnedProcess(child);
+                closed.push({ role, pid: child.pid, attempted: true, closed: true });
+            } catch (error) {
+                errors.push(error);
+                closed.push({ role, pid: child.pid, attempted: true, closed: false, error: String(error) });
+            }
         }
-        throw new Error('Documented local command did not serve');
-    };
+        const listeners = await Promise.allSettled(ports.map(requireClosedPort));
+        for (const result of listeners) if (result.status === 'rejected') errors.push(result.reason);
+        proof.nativePortsClosed = listeners.slice(0, 2).every(result => result.status === 'fulfilled');
+        proof.groups = closed;
+        proof.listenersClosed = listeners.every(result => result.status === 'fulfilled');
+        proof.directoryRemoved = false;
+        if (!errors.length) {
+            await rm(directory, { recursive: true, force: true });
+            proof.directoryRemoved = true;
+        }
+        await writeFile(`${root}/local-workflow.log`, log);
+        await writeFile(`${root}/local-frontend.log`, frontendLog);
+        await writeFile(`${root}/local-workflow.json`, JSON.stringify(proof, null, 2));
+        if (errors.length) throw new AggregateError(errors, `Local workflow cleanup failed; state preserved at ${directory}`);
+    });
     const previousDirectory = process.env.CONVEX_LOCAL_DIR;
     try {
+        const port = await freePort();
+        ports.push(port);
+        const sitePort = await freePort();
+        ports.push(sitePort);
+        assert(![3210, 3211, 3100, 3220, 3221, 3917].includes(port));
+        assert(![3210, 3211, 3100, 3220, 3221, 3917].includes(sitePort));
+        Object.assign(proof, { port, sitePort });
+        const client = new ConvexHttpClient(`http://127.0.0.1:${port}`);
+        const ping = makeFunctionReference<'query'>('smoke:ping');
+        const stop = async () => {
+            if (child) await stopOwnedProcess(child);
+            await Promise.all([requireClosedPort(port), requireClosedPort(sitePort)]);
+        };
+        const start = async () => {
+            child = spawnOwnedProcess('npm', ['run', 'backend:local'], { cwd: directory, detached: true,
+                env: { PATH: process.env.PATH, NODE_ENV: 'test', CONVEX_LOCAL_CLOUD_PORT: String(port),
+                    CONVEX_LOCAL_SITE_PORT: String(sitePort), CONVEX_LOCAL_BACKEND_VERSION: isolatedBackendVersion },
+                stdio: ['ignore', 'pipe', 'pipe'] }, 'SIGTERM');
+            groups.push({ role: 'backend', child });
+            child.stdout!.on('data', data => { log += String(data); });
+            child.stderr!.on('data', data => { log += String(data); });
+            for (let attempt = 0; attempt < 600; attempt++) {
+                if (child.exitCode !== null) throw new Error(`Documented command exited ${child.exitCode}: ${log}`);
+                try { await client.query(ping, {}); return; } catch { await sleep(250); }
+            }
+            throw new Error('Documented local command did not serve');
+        };
         for (const name of ['app', 'convex', 'lib', 'scripts', 'league']) {
             await cp(resolve(name), `${directory}/${name}`, { recursive: true });
         }
@@ -69,10 +102,12 @@ async function main() {
         proof.freshDataControl = true;
         assert((await stat(`${directory}/.env.local`)).size > 0);
         const frontendPort = await freePort();
+        ports.push(frontendPort);
         proof.frontendPort = frontendPort;
-        frontend = spawnOwnedProcess('npm', ['run', 'dev', '--', '--webpack', '--port', String(frontendPort)],
+        const frontend = spawnOwnedProcess('npm', ['run', 'dev', '--', '--webpack', '--port', String(frontendPort)],
             { cwd: directory, detached: true, env: { PATH: process.env.PATH, NODE_ENV: 'development' },
                 stdio: ['ignore', 'pipe', 'pipe'] }, 'SIGTERM');
+        groups.push({ role: 'frontend', child: frontend });
         frontend.stdout!.on('data', data => { frontendLog += String(data); });
         frontend.stderr!.on('data', data => { frontendLog += String(data); });
         let frontendLoadedUrl = false;
@@ -112,19 +147,9 @@ async function main() {
     } finally {
         if (previousDirectory === undefined) delete process.env.CONVEX_LOCAL_DIR;
         else process.env.CONVEX_LOCAL_DIR = previousDirectory;
-        const errors: unknown[] = [];
-        if (frontend) {
-            try { await stopOwnedProcess(frontend); await requireClosedPort(proof.frontendPort as number); }
-            catch (error) { errors.push(error); }
-        }
-        try { await stop(); proof.nativePortsClosed = true; }
-        catch (error) { errors.push(error); }
-        proof.directoryRemoved = false;
-        if (!errors.length) { await rm(directory, { recursive: true, force: true }); proof.directoryRemoved = true; }
-        await writeFile(`${root}/local-workflow.log`, log);
-        await writeFile(`${root}/local-frontend.log`, frontendLog);
-        await writeFile(`${root}/local-workflow.json`, JSON.stringify(proof, null, 2));
-        if (errors.length) throw new AggregateError(errors, `Local workflow cleanup failed; state preserved at ${directory}`);
+        await close();
     }
 }
-withResources(main).catch(error => { console.error(error); process.exitCode = 1; });
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+    withResources(localWorkflow).catch(error => { console.error(error); process.exitCode = 1; });
+}
