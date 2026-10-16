@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { ConvexHttpClient } from 'convex/browser';
+import { Bot } from '../scripts/bot';
 import { Replay } from '../scripts/audit';
 import { assertFloors } from '../scripts/simulation-results';
 import { Strategy } from '../scripts/strategy';
@@ -24,6 +26,28 @@ function state(): AuctionState {
 }
 
 describe('competitive simulation', () => {
+    it('counts stale control races as rejections and keeps missing bindings fatal', async () => {
+        const bot = new Bot(1, 'http://127.0.0.1:9999');
+        const mutation = vi.spyOn(ConvexHttpClient.prototype, 'mutation');
+        const snapshot = vi.spyOn(bot, 'state').mockResolvedValue(state());
+        const action = { type: 'pause', expectedRunning: 'observed:1' } as const;
+        try {
+            for (const error of [
+                'Draft is not running', 'Draft is not paused',
+                'The draft has resumed again. Check before pausing.',
+                'The draft was paused again. Check before resuming.'
+            ]) {
+                mutation.mockResolvedValueOnce({ ok: false, error, status: 409 });
+                expect(await bot.action(action, true)).toBe(false);
+                expect(bot.rejected[`409: ${error}`]).toBe(1);
+            }
+            mutation.mockResolvedValueOnce({ ok: false, error: 'Refresh the page to continue', status: 409 });
+            await expect(bot.action(action, true)).rejects.toThrow('Refresh the page to continue');
+        } finally {
+            mutation.mockRestore();
+            snapshot.mockRestore();
+        }
+    });
     it('draws stable valuations that change across managers and seeds', () => {
         const room = state();
         const player = { ...room.players[0], projection: 30, adp: 80 };

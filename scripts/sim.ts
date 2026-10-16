@@ -189,15 +189,19 @@ class DraftDriver {
             amount: state.lot!.highBid + 1
         });
         await this.capBids(lotId);
+        state = await this.state();
         await this.commissioner.action({
-            type: "pause"
+            type: "pause",
+            expectedRunning: state.draft.controlGeneration
         });
         state = await this.state();
         const remaining = state.draft.remainingMs;
         await sleep(300);
         assert.equal((await this.state()).draft.remainingMs, remaining);
+        state = await this.state();
         await this.commissioner.action({
-            type: "resume"
+            type: "resume",
+            expectedPause: state.draft.controlGeneration
         });
         await this.bot(3 + Math.floor(random() * 8)).reconnect();
         this.reconnects++;
@@ -247,8 +251,10 @@ class DraftDriver {
         await this.undoLatest();
         await this.undoLatest();
         assert.equal((await this.state()).draft.status, "paused");
+        state = await this.state();
         await this.commissioner.action({
-            type: "resume"
+            type: "resume",
+            expectedPause: state.draft.controlGeneration
         });
     }
     async midDraft(state: AuctionState) {
@@ -260,18 +266,23 @@ class DraftDriver {
         }
         if (active >= this.midAt.pause && !this.midDone.has("pause")) {
             await this.commissioner.action({
-                type: "pause"
+                type: "pause",
+                expectedRunning: state.draft.controlGeneration
             });
             await sleep(150);
+            state = await this.state();
             await this.commissioner.action({
-                type: "resume"
+                type: "resume",
+                expectedPause: state.draft.controlGeneration
             });
             this.midDone.add("pause");
         }
         if (active >= this.midAt.undo && !this.midDone.has("undo")) {
             await this.undoLatest();
+            state = await this.state();
             await this.commissioner.action({
-                type: "resume"
+                type: "resume",
+                expectedPause: state.draft.controlGeneration
             });
             this.midDone.add("undo");
             return false;

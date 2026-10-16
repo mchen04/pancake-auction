@@ -10,7 +10,8 @@ const raceReasons = new Set([
     'Player is no longer available', 'This lot has ended. Refresh and try the current lot.',
     'Bid arrived after the deadline', 'The high bidder cannot give up', 'You already gave up on this player',
     'The latest sale has changed. Review it before undoing.', 'That nomination turn has ended',
-    'The high bid has changed. Review it before forcing a sale.'
+    'The high bid has changed. Review it before forcing a sale.', 'Draft is not running', 'Draft is not paused',
+    'The draft has resumed again. Check before pausing.', 'The draft was paused again. Check before resuming.'
 ]);
 export class Bot {
     token = '';
