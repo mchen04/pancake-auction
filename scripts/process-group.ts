@@ -55,7 +55,12 @@ export async function stopGroup(owner: OwnedGroup, signal: NodeJS.Signals = 'SIG
         }
         if (owner.closed) return;
         if (owner.releaseAnchor && owner.members.every(member => member.pid === owner.pid)) {
-            await owner.releaseAnchor();
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            try {
+                await Promise.race([owner.releaseAnchor(), new Promise<void>(resolve => {
+                    timer = setTimeout(resolve, 250);
+                })]);
+            } finally { clearTimeout(timer); }
             if (performance.now() - started < 2000) {
                 await new Promise(resolve => setTimeout(resolve, 25));
                 continue;

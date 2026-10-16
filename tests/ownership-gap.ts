@@ -73,6 +73,27 @@ async function relay(proof: Record<string, unknown>) {
         assert.equal(output, 'out:input'); assert.equal(error, 'err');
     } finally { await stopOwnedProcess(child); proof.group = group; }
 }
+async function stalledRelease(proof: Record<string, unknown>) {
+    const child = spawnOwnedProcess(process.execPath, ['-e', ''], { stdio: 'ignore' });
+    const group = ownedProcessGroup(child)!;
+    await until(() => child.exitCode !== null);
+    const release = group.releaseAnchor!;
+    let unblock: () => void = () => {};
+    const delayed = new Promise<void>(resolve => { unblock = resolve; });
+    group.releaseAnchor = () => delayed;
+    let settled = false;
+    const started = performance.now();
+    const stopping = stopOwnedProcess(child).finally(() => { settled = true; });
+    try {
+        await Promise.race([stopping, sleep(4000)]);
+        proof.settledWithinBound = settled; proof.elapsedMs = performance.now() - started;
+        assert(settled, 'A stalled release acknowledgement must not defeat the group deadline');
+        assert(group.closed);
+    } finally {
+        group.releaseAnchor = release; unblock();
+        await stopping; await stopGroup(group); proof.group = group;
+    }
+}
 async function identityControl(kind: 'uncertain' | 'reused', proof: Record<string, unknown>) {
     const child = spawnOwnedProcess(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });
     const group = ownedProcessGroup(child)!;
@@ -181,6 +202,7 @@ async function main() {
     await makeEvidenceDirectory(root, { recursive: true });
     await check('C48 quiet fast parent exits before listener without losing owned continuity', fastParent);
     await check('C48 command streams and nonzero exit code pass through the anchor', relay);
+    await check('C48 a stalled anchor release stays within the group teardown bound', stalledRelease);
     await check('C48 reused identity never receives a signal', proof => identityControl('reused', proof));
     await check('C48 uncertain ownership never receives a signal', proof => identityControl('uncertain', proof));
     await check('C48 failed push teardown still closes independent groups and preserves state', failedGroup);
