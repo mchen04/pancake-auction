@@ -29,6 +29,8 @@ Import, manager setup, and CLI recovery call internal functions through the Conv
 
 ## Local verification
 
+The mini helper limits a pinned backend archive download to 120 seconds, including headers and the full body. This allows roughly 0.5 MB/s for a 60 MB archive. `MINI_RUN_BACKEND_DOWNLOAD_MS` overrides the deadline, clamped to 250–300,000 ms for bounded tests and slower links. Failure removes the owned download state and releases the preparation lock. A valid cached binary requires no download.
+
 Set `EVIDENCE_DIR` outside the repository. The containment check resolves physical paths, including symlinks and missing suffixes. Run `npm run verify`. The installed `agent-browser` CLI supplies separate headless Chromium browsers.
 
 Each test command and simulation creates a fresh anonymous local Convex backend with its own ports, data directory, and private CLI configuration. The harness removes that state and stops its processes afterward. No existing deployment, credentials, or database is used. Tests fail if the backend cannot start. Fixtures replace all Sleeper requests in importer tests.
