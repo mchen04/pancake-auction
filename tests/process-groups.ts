@@ -108,5 +108,31 @@ async function main() {
             const ended = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGKILL'); await ended;
         }
     });
+    await check('C42 transient closure probes retry without treating EPERM as closed', async proof => {
+        const original = process.kill;
+        let target = 0, signalled = false, transients = 0;
+        process.kill = ((pid, signal) => {
+            if (pid === -target && signal === 0 && signalled && transients < 3) {
+                transients++; throw Object.assign(new Error('Injected transient probe'), { code: 'EPERM' });
+            }
+            if (pid === -target && signal !== 0) signalled = true;
+            return original(pid, signal);
+        }) as typeof process.kill;
+        let child: ChildProcess | undefined;
+        try {
+            await withResources(async () => {
+                child = ownProcess(spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'],
+                    { detached: true, stdio: 'ignore' }), 'SIGTERM', true);
+                target = child.pid!;
+            });
+            proof.transients = transients; assert.equal(transients, 3);
+            assert.throws(() => original(-target, 0), { code: 'ESRCH' });
+        } finally {
+            process.kill = original;
+            if (child && child.exitCode === null && child.signalCode === null) {
+                const ended = new Promise(resolve => child!.once('exit', resolve)); child.kill('SIGKILL'); await ended;
+            }
+        }
+    });
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

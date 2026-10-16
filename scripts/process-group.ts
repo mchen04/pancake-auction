@@ -46,9 +46,14 @@ export async function stopGroup(owner: OwnedGroup, signal: NodeJS.Signals = 'SIG
     const started = performance.now();
     let forced = signal === 'SIGKILL', signalled = false;
     for (;;) {
-        refreshGroup(owner);
-        if (owner.closed) return;
         if (performance.now() - started >= 8000) throw new Error(`Owned process group ${owner.pgid} did not stop`);
+        try { refreshGroup(owner); }
+        catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
+            await new Promise(resolve => setTimeout(resolve, 25));
+            continue;
+        }
+        if (owner.closed) return;
         if (!signalled || !forced && performance.now() - started >= 2000) {
             const next = signalled ? 'SIGKILL' : signal;
             try { process.kill(-owner.pgid, next); }
