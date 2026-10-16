@@ -383,6 +383,13 @@ async function runDraft(run: number, pool: Player[], source: string, evidence: s
     try {
         await seedPlayers(pool, importMetadata);
         await seedManagers();
+        if (process.argv.includes('--check-import')) {
+            result.clients = 0;
+            result.seededImport = (await inspect()).imports.at(-1);
+            result.check = 'import-only; no draft started';
+            result.exitCode = 0;
+            return;
+        }
         if (timing === 'fast') {
             await configure({ draft: { nominationMs: 3000, biddingMs: 3000, extensionMs: 1500, capMs: 4500 } });
         }
@@ -468,6 +475,7 @@ async function parallelRun(run: number, evidence: string) {
 async function main() {
     assert(Number.isInteger(runs) && runs > 0 && Number.isFinite(seed));
     assert(["fast", "real"].includes(timing));
+    assert(!process.argv.includes('--check-import') || runs === 1);
     const evidence = evidenceDirectory(process.env.EVIDENCE_DIR, true)!;
     process.chdir(repositoryDirectory);
     await mkdir(`${evidence}/sim`, {
@@ -480,7 +488,9 @@ async function main() {
     if (runs === 1) {
         const run = Number(option('--run-index', '1'));
         await runDraft(run, players, source, evidence, importMetadata);
-        await recordSpread([`${evidence}/sim/run-${timing}-${seed}-${run}.json`]);
+        if (!process.argv.includes('--check-import')) {
+            await recordSpread([`${evidence}/sim/run-${timing}-${seed}-${run}.json`]);
+        }
     } else {
         for (let first = 1; first <= runs; first += 3) {
             const group = Array.from({ length: Math.min(3, runs - first + 1) }, (_, index) => first + index);

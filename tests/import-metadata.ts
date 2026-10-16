@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import fixture from './fixtures/sleeper-pool.json';
@@ -27,6 +28,33 @@ async function main() {
             assert.deepEqual(stored.coverage, fixture.coverage);
             results.at(-1)!.result = 'passed';
             console.log('PASS C34 recorded pool retains immutable fetch metadata in Convex');
+        } catch (error) { results.at(-1)!.error = String(error); }
+        try {
+            const name = 'C34 actual simulation seeding preserves recorded pool provenance';
+            results.push({ name, result: 'failed' });
+            const source = await readFile(resolve('scripts/sim.ts'), 'utf8');
+            assert(source.includes("process.argv.includes('--check-import')"),
+                'The actual simulation must expose an import-only check before running a full draft');
+            const checked = spawnSync(process.execPath, ['--import', 'tsx', 'scripts/sim.ts', '--runs', '1',
+                '--timing', 'fast', '--seed', '42', '--skip-build', '--check-import'], {
+                cwd: resolve('.'), encoding: 'utf8', timeout: 90000,
+                env: { PATH: process.env.PATH, NODE_ENV: 'test', EVIDENCE_DIR: `${root}/simulation` }
+            });
+            await writeEvidenceFile(`${root}/simulation.log`, checked.stdout + checked.stderr);
+            assert.equal(checked.status, 0, checked.stderr);
+            const reported = JSON.parse(await readFile(`${root}/simulation/sim/run-fast-42-1.json`, 'utf8'));
+            const stored = reported.seededImport;
+            Object.assign(results.at(-1)!, { reported, stored });
+            assert.equal(reported.check, 'import-only; no draft started');
+            assert.equal(reported.clients, 0);
+            assert.equal(stored.fetchedAt, fixture.fetchedAt);
+            assert.deepEqual(stored.sources, sourceUrls);
+            assert.deepEqual(stored.counts, fixture.counts);
+            assert.deepEqual(stored.coverage, fixture.coverage);
+            assert.deepEqual(reported.importMetadata, metadata);
+            assert(reported.source.includes(fixture.fetchedAt));
+            results.at(-1)!.result = 'passed';
+            console.log(`PASS ${name}`);
         } catch (error) { results.at(-1)!.error = String(error); }
         const freshAt = Date.now();
         const imported = spawnSync(process.execPath, ['--import', 'tsx', '--import', resolve('tests/import-fetch.mjs'),
