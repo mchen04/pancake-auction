@@ -6,11 +6,12 @@ import {
 import { withResources, ownProcess, ownCleanup } from '../scripts/resources';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { rm, stat, symlink } from 'node:fs/promises';
+import { rm, stat, symlink, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { ConvexHttpClient } from 'convex/browser';
 import { makeFunctionReference } from 'convex/server';
 import { api } from '../convex/_generated/api';
+import { isolatedBackendVersion } from '../scripts/local-version';
 import { runAdmin } from '../scripts/admin-client';
 import { evidenceDirectory } from '../scripts/evidence';
 import { freePort, requireClosedPort, sleep } from '../scripts/local-backend';
@@ -43,7 +44,8 @@ async function main() {
     const start = async () => {
         child = ownProcess(spawn('npm', ['run', 'backend:local'], { cwd: directory, detached: true,
             env: { PATH: process.env.PATH, NODE_ENV: 'test', CONVEX_LOCAL_CLOUD_PORT: String(port),
-                CONVEX_LOCAL_SITE_PORT: String(sitePort) }, stdio: ['ignore', 'pipe', 'pipe'] }), 'SIGTERM', true);
+                CONVEX_LOCAL_SITE_PORT: String(sitePort), CONVEX_LOCAL_BACKEND_VERSION: isolatedBackendVersion },
+            stdio: ['ignore', 'pipe', 'pipe'] }), 'SIGTERM', true);
         child.stdout!.on('data', data => { log += String(data); });
         child.stderr!.on('data', data => { log += String(data); });
         for (let attempt = 0; attempt < 600; attempt++) {
@@ -88,6 +90,9 @@ async function main() {
             await sleep(250);
         }
         assert(frontendLoadedUrl, 'Next must load the generated frontend URL without an injected URL');
+        const configuration = JSON.parse(await readFile(`${directory}/.convex/local/default/config.json`, 'utf8'));
+        assert.equal(configuration.backendVersion, isolatedBackendVersion);
+        proof.backendVersion = configuration.backendVersion;
         proof.frontendUrlWritten = true;
         proof.nextLoadedGeneratedUrl = true;
         process.env.CONVEX_LOCAL_DIR = `${directory}/.convex/local/default`;

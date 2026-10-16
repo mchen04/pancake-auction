@@ -9,9 +9,11 @@ async function main() {
     await mkdir(directory, { recursive: true });
     const temporary = resolve('.convex/tmp');
     await mkdir(temporary, { recursive: true });
+    const version = process.env.CONVEX_LOCAL_BACKEND_VERSION;
+    const versionArguments = version ? ['--local-backend-version', version] : [];
     const child = spawn(process.execPath, ['--import', resolve('scripts/local-cli.mjs'),
         resolve('node_modules/convex/bin/main.js'), 'dev', '--local-cloud-port', String(ports.cloud),
-        '--local-site-port', String(ports.site), '--typecheck', 'disable', '--codegen', 'disable'],
+        '--local-site-port', String(ports.site), '--typecheck', 'disable', '--codegen', 'disable', ...versionArguments],
     { env: { PATH: process.env.PATH, NODE_ENV: 'development', AUCTION_CLI_HOME: directory,
         CONVEX_AGENT_MODE: 'anonymous', CONVEX_DISABLE_TELEMETRY: '1', TMPDIR: temporary }, stdio: 'inherit' });
     process.once('SIGTERM', () => child.kill('SIGINT'));

@@ -11,6 +11,7 @@ import { resolve } from 'node:path';
 import { ConvexHttpClient } from 'convex/browser';
 import { makeFunctionReference } from 'convex/server';
 import { evidenceDirectory, repositoryDirectory } from './evidence';
+import { isolatedBackendVersion } from './local-version';
 
 export const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 async function cacheLock(cache: string) {
@@ -97,7 +98,8 @@ async function startBackend(label: string, fixtures: boolean, directory: string,
     const preload = resolve(repositoryDirectory, 'scripts/local-cli.mjs');
     const child = spawn(process.execPath, ['--import', preload, cli, 'dev', '--typecheck', 'disable',
         '--codegen', 'disable', '--local-cloud-port', String(port), '--local-site-port', String(sitePort),
-        '--tail-logs', 'disable'], { cwd: directory, env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
+        '--tail-logs', 'disable', '--local-backend-version', isolatedBackendVersion],
+    { cwd: directory, env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
     let log = '';
     child.stdout.on('data', data => { log += String(data); });
     child.stderr.on('data', data => { log += String(data); });
@@ -119,7 +121,8 @@ async function startBackend(label: string, fixtures: boolean, directory: string,
     try {
         let ready = false;
         for (let attempt = 0; attempt < 600; attempt++) {
-            if (child.exitCode !== null) throw new Error(`Local Convex exited ${child.exitCode}: ${log}`);
+            if (child.exitCode !== null) throw new Error(`Cannot start pinned Convex backend ${isolatedBackendVersion}. `
+                + `It must be cached or downloadable. Local Convex exited ${child.exitCode}: ${log}`);
             try {
                 await client.query(makeFunctionReference<'query'>('smoke:ping'), {});
                 ready = true;
@@ -148,7 +151,8 @@ async function startBackend(label: string, fixtures: boolean, directory: string,
             return output.trim() ? JSON.parse(output) : null;
         };
         const identity = { mode: 'anonymous', version: configuration.backendVersion, url, port, sitePort,
-            command: 'convex dev --typecheck disable --codegen disable', directory };
+            command: `convex dev --typecheck disable --codegen disable --local-backend-version ${isolatedBackendVersion}`,
+            directory };
         await writeFile(`${evidence}/backend-${label}.json`, JSON.stringify(identity, null, 2));
         await appendFile(`${evidence}/local-backends.jsonl`, JSON.stringify({ label, action: 'ready',
             pid: child.pid, ...identity }) + '\n');
