@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { makeEvidenceDirectory, writeEvidenceFile } from '../scripts/evidence';
-import { ownProcess, withResources } from '../scripts/resources';
+import { ownProcess, spawnOwnedProcess, withResources } from '../scripts/resources';
 
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const root = `${process.env.EVIDENCE_DIR}/process-groups`;
@@ -38,8 +38,8 @@ async function listener(killLeader: boolean, resist: boolean, proof: Record<stri
     const started = performance.now();
     try {
         await withResources(async () => {
-            child = ownProcess(spawn(process.execPath, ['-e', parent],
-                { detached: true, stdio: ['ignore', 'pipe', 'pipe'] }), 'SIGTERM', true);
+            child = spawnOwnedProcess(process.execPath, ['-e', parent],
+                { detached: true, stdio: ['ignore', 'pipe', 'pipe'] }, 'SIGTERM');
             const startedMember = await new Promise<{ pid: number; port: number }>((resolve, reject) => {
                 let text = '';
                 const timer = setTimeout(() => reject(new Error('Owned listener did not start')), 5000);
@@ -86,7 +86,7 @@ async function main() {
     await check('C42 a resistant descendant is killed within the teardown bound', proof => listener(true, true, proof));
     await check('C42 already-exited leader without descendants needs no signal', async proof => {
         await withResources(async () => {
-            const child = ownProcess(spawn(process.execPath, ['-e', ''], { detached: true, stdio: 'ignore' }), 'SIGTERM', true);
+            const child = spawnOwnedProcess(process.execPath, ['-e', ''], { detached: true, stdio: 'ignore' }, 'SIGTERM');
             await new Promise(resolve => child.once('exit', resolve));
             proof.pid = child.pid;
         });
@@ -121,8 +121,8 @@ async function main() {
         let child: ChildProcess | undefined;
         try {
             await withResources(async () => {
-                child = ownProcess(spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'],
-                    { detached: true, stdio: 'ignore' }), 'SIGTERM', true);
+                child = spawnOwnedProcess(process.execPath, ['-e', 'setInterval(()=>{},1000)'],
+                    { detached: true, stdio: 'ignore' }, 'SIGTERM');
                 target = child.pid!;
             });
             proof.transients = transients; assert.equal(transients, 3);

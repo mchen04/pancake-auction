@@ -1,9 +1,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { execFile, type ChildProcess } from 'node:child_process';
+import { execFile, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import type { Server, Socket } from 'node:net';
 import { promisify } from 'node:util';
 import { appendEvidenceFile, captureEvidence } from './evidence';
-import { captureGroup, refreshGroup, stopGroup, type OwnedGroup } from './process-group';
+import { refreshGroup, stopGroup, type OwnedGroup } from './process-group';
+
+import { createOwnedCommand, ownedProcessGroup } from './owned-command';
+export { ownedProcessGroup, ownedCommandPid } from './owned-command';
 
 const execute = promisify(execFile);
 const active = new AsyncLocalStorage<Resources>();
@@ -80,7 +83,8 @@ export function ownClient<T extends { close: () => Promise<void> }>(client: T) {
 }
 export function ownProcess<T extends ChildProcess>(child: T, signal: NodeJS.Signals = 'SIGTERM', group = false) {
     if (ownedProcesses.has(child)) return child;
-    const identity = group && child.pid ? captureGroup(child.pid) : undefined;
+    const identity = group ? ownedProcessGroup(child) : undefined;
+    if (group && !identity) throw new Error('Owned groups must start through spawnOwnedProcess');
     const record = { closed: false, group: identity, close: async () => {} };
     const observe = () => { if (identity) { try { refreshGroup(identity); } catch {} } };
     const timer = identity ? setInterval(observe, 100).unref() : undefined;
@@ -101,6 +105,10 @@ export function ownProcess<T extends ChildProcess>(child: T, signal: NodeJS.Sign
     });
     ownedProcesses.set(child, record);
     return child;
+}
+export function spawnOwnedProcess(command: string, args: string[], options: SpawnOptions = {},
+    signal: NodeJS.Signals = 'SIGTERM') {
+    return ownProcess(createOwnedCommand(command, args, options), signal, true);
 }
 export async function stopOwnedProcess(child: ChildProcess) {
     const record = ownedProcesses.get(child);

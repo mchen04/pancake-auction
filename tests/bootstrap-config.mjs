@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict';
 import filesystem, { access, cp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { syncBuiltinESMExports } from 'node:module';
 import { resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { makeEvidenceDirectory, makeEvidenceTemporaryDirectory, writeEvidenceFile } from '../scripts/evidence.ts';
-import { captureGroup, stopGroup } from '../scripts/process-group.ts';
+import { stopGroup } from '../scripts/process-group.ts';
 
 const version = 'precompiled-2026-10-06-a3538c6';
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -23,10 +22,17 @@ if (process.env.CONFIG_INTERRUPT === '1') {
     };
     syncBuiltinESMExports();
 } else {
+    const { tsImport } = await import('tsx/esm/api');
+    const { spawnOwnedProcess, ownedProcessGroup } = await tsImport('../scripts/resources.ts', import.meta.url);
     const root = `${process.env.EVIDENCE_DIR}/bootstrap-config`;
     await makeEvidenceDirectory(root, { recursive: true });
     const directory = await makeEvidenceTemporaryDirectory(`${root}/source-`);
     const children = [], results = [];
+    const stopChildren = async () => {
+        const stopped = await Promise.allSettled(children.map(worker => stopGroup(worker.group, 'SIGINT')));
+        const errors = stopped.filter(row => row.status === 'rejected').map(row => row.reason);
+        if (errors.length) throw new AggregateError(errors, 'Configuration fixture cleanup failed; state preserved');
+    };
     async function until(check, bound = 15000) {
         const deadline = performance.now() + bound;
         while (!await check()) { assert(performance.now() < deadline, 'Isolated CLI did not become ready'); await pause(50); }
@@ -57,7 +63,7 @@ if (process.env.CONFIG_INTERRUPT === '1') {
             '--local-backend-version', version, '--typecheck', 'disable', '--codegen', 'disable'];
         function start(name, interrupt = false, prepareOnly = false) {
             const log = `${root}/${name}-network.jsonl`;
-            const child = spawn(process.execPath, ['--import', `${directory}/tests/backend-fetch.mjs`,
+            const child = spawnOwnedProcess(process.execPath, ['--import', `${directory}/tests/backend-fetch.mjs`,
                 ...(interrupt ? ['--import', import.meta.filename] : []),
                 '--import', `${directory}/scripts/local-cli.mjs`,
                 ...(prepareOnly ? ['-e', '', '--'] : [`${directory}/node_modules/convex/bin/main.js`]), ...args],
@@ -66,7 +72,7 @@ if (process.env.CONFIG_INTERRUPT === '1') {
                 AUCTION_NETWORK_LOG: log, TMPDIR: directory,
                 ...(interrupt ? { CONFIG_INTERRUPT: '1', CONFIG_TARGET: configuration } : {}) },
             stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
-            const group = captureGroup(child.pid);
+            const group = ownedProcessGroup(child);
             let boundary = false, output = '';
             child.on('message', message => { if (message.boundary) boundary = true; });
             child.stdout.on('data', data => { output += data; });
@@ -93,7 +99,7 @@ if (process.env.CONFIG_INTERRUPT === '1') {
                 results.push({ name, result: 'failed', error: String(error), proof });
                 console.log(`FAIL ${name}: ${error}`); process.exitCode = 1;
             }
-            for (const worker of children) await stopGroup(worker.group, 'SIGINT');
+            await stopChildren();
             assert.equal(await listening(port), false); assert.equal(await listening(sitePort), false);
             await writeEvidenceFile(`${root}/results.json`, JSON.stringify(results, null, 2));
         }
@@ -148,7 +154,7 @@ if (process.env.CONFIG_INTERRUPT === '1') {
             assert.deepEqual(proof.temporaryFiles, []);
         });
     } finally {
-        for (const worker of children) await stopGroup(worker.group, 'SIGINT');
+        await stopChildren();
         await rm(directory, { recursive: true, force: true });
         await writeEvidenceFile(`${root}/cleanup.json`, JSON.stringify({ directory,
             directoryRemoved: !await access(directory).then(() => true, () => false),

@@ -3,7 +3,7 @@ import { hostname } from 'node:os';
 
 type Member = { pid: number; pgid: number; start: string };
 export type OwnedGroup = { host: string; pid: number; pgid: number; processStart: string;
-    members: Member[]; closed: boolean };
+    members: Member[]; closed: boolean; anchored?: boolean; releaseAnchor?: () => Promise<void> };
 function processes(): Member[] {
     return execFileSync('ps', ['-axo', 'pid=,pgid=,lstart='], { encoding: 'utf8' }).trim().split('\n')
         .flatMap(line => {
@@ -54,6 +54,13 @@ export async function stopGroup(owner: OwnedGroup, signal: NodeJS.Signals = 'SIG
             continue;
         }
         if (owner.closed) return;
+        if (owner.releaseAnchor && owner.members.every(member => member.pid === owner.pid)) {
+            await owner.releaseAnchor();
+            if (performance.now() - started < 2000) {
+                await new Promise(resolve => setTimeout(resolve, 25));
+                continue;
+            }
+        }
         if (!signalled || !forced && performance.now() - started >= 2000) {
             const next = signalled ? 'SIGKILL' : signal;
             try { process.kill(-owner.pgid, next); }

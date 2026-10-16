@@ -33,8 +33,11 @@ async function main() {
             const [command, args, options] = values;
             if (Array.isArray(args) && args.includes('dev')
                 && options?.env?.AUCTION_CLI_HOME) {
+                const anchored = args[0]?.endsWith('/command-anchor.mjs');
+                const commandArgs = anchored ? args.slice(2) : args;
+                const instrumented = ['--import', resolve('tests/backend-fetch.mjs'), ...commandArgs];
                 return Reflect.apply(target, receiver, [command,
-                    ['--import', resolve('tests/backend-fetch.mjs'), ...args],
+                    anchored ? [args[0], args[1], ...instrumented] : instrumented,
                     { ...options, env: { ...options?.env, AUCTION_NETWORK_LOG: log,
                         AUCTION_DASHBOARD_STATE: dashboardState,
                         ...(emptyCache ? { AUCTION_EMPTY_CACHE: emptyCache } : {}) } }]);

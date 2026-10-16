@@ -11,7 +11,8 @@ import { preparationLock } from '../scripts/preparation-lock';
 import { withResources } from '../scripts/resources';
 import { makeEvidenceDirectory, writeEvidenceFile, repositoryDirectory } from '../scripts/evidence';
 
-type Fixture = { child: childProcess.ChildProcess; group: OwnedGroup; kind: string; directory: string };
+type Fixture = { child: childProcess.ChildProcess; group: OwnedGroup; kind: string; directory: string;
+    commandExit?: number | null; exitBeforeOutput?: boolean };
 const root = `${process.env.EVIDENCE_DIR}/backend-deadline`;
 const results: Record<string, unknown>[] = [];
 const exists = (path: string) => access(path).then(() => true, () => false);
@@ -38,6 +39,7 @@ for(const port of process.argv.slice(1).map(Number)) {
     server.listen(port,'127.0.0.1',()=>console.log(JSON.stringify({kind:'native',port})));
 }`;
 const descendantCode = `
+if(process.env.FIXTURE_MODE==='quiet-parent')Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,250);
 const server=require('node:net').createServer();
 server.listen(0,'127.0.0.1',()=>console.log(JSON.stringify({kind:'descendant',port:server.address().port})));
 if(process.env.FIXTURE_MODE==='stall') {
@@ -45,8 +47,11 @@ if(process.env.FIXTURE_MODE==='stall') {
 }`;
 childProcess.spawn = new Proxy(originalSpawn, {
     apply(target, receiver, values: Parameters<typeof childProcess.spawn>) {
-        const [command, args, options] = values;
-        if (!Array.isArray(args) || typeof options?.cwd !== 'string') return Reflect.apply(target, receiver, values);
+        const [outerCommand, outerArgs, options] = values;
+        if (!Array.isArray(outerArgs) || typeof options?.cwd !== 'string') return Reflect.apply(target, receiver, values);
+        const anchored = outerArgs[0]?.endsWith('/command-anchor.mjs');
+        const command = anchored ? outerArgs[1] : outerCommand;
+        const args = anchored ? outerArgs.slice(2) : outerArgs;
         let kind: string;
         let fixtureArgs: string[];
         if (args.includes('--local-backend-version')) {
@@ -69,20 +74,30 @@ childProcess.spawn = new Proxy(originalSpawn, {
                    if(process.env.FIXTURE_MODE==='stall') {
                        process.on('SIGINT',()=>{});process.on('SIGTERM',()=>{});
                    }
-                   setInterval(()=>{},1000);`];
+                   ${mode === 'quiet-parent' ? 'process.exit(2);' : 'setInterval(()=>{},1000);'}`];
         } else return Reflect.apply(target, receiver, values);
-        const child = Reflect.apply(target, receiver, [process.execPath, fixtureArgs, {
-            ...options, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+        const child = Reflect.apply(target, receiver, [process.execPath,
+            anchored ? [outerArgs[0], process.execPath, ...fixtureArgs] : fixtureArgs, {
+            ...options, detached: true, stdio: anchored ? options.stdio : ['ignore', 'pipe', 'pipe'],
             env: { PATH: process.env.PATH, FIXTURE_MODE: mode }
         }]) as childProcess.ChildProcess;
         const group = captureGroup(child.pid!);
-        children.push({ child, group, kind, directory: options.cwd });
-        child.stdout!.on('data', data => {
+        const fixture: Fixture = { child, group, kind, directory: options.cwd };
+        children.push(fixture);
+        let outputSeen = false;
+        const output = (data: unknown) => {
+            outputSeen = true;
             for (const line of String(data).trim().split('\n')) {
                 try { const value = JSON.parse(line); if (Number.isInteger(value.port)) ports.add(value.port); } catch {}
             }
             refreshGroup(group);
+        };
+        if (anchored) child.on('message', message => {
+            const value = message as { type?: string; value?: string; code?: number | null };
+            if (value.type === 'exit') { fixture.commandExit = value.code; fixture.exitBeforeOutput = !outputSeen; }
+            if (value.type === 'data') output(Buffer.from(value.value!, 'base64'));
         });
+        else child.stdout!.on('data', output);
         return child;
     }
 });
@@ -111,7 +126,9 @@ async function exercise(selected: string, proof: Record<string, unknown>) {
             }
             await sleep(100);
             const push = children.find(value => value.kind === 'push')!;
-            refreshGroup(push.group); await stopGroup(push.group);
+            refreshGroup(push.group);
+            if (push.child.connected) process.kill(-push.group.pgid, 'SIGTERM');
+            else await stopGroup(push.group);
         }
         await Promise.race([running, sleep(5000)]);
         proof.settledWithinBound = settled;
@@ -131,6 +148,11 @@ async function exercise(selected: string, proof: Record<string, unknown>) {
             assert(failure instanceof Error); assert.match(failure.message, /setup timed out after 1000 ms/i);
         }
         for (const { group } of children) refreshGroup(group);
+        proof.commandExits = children.map(({ kind, commandExit, exitBeforeOutput }) => ({ kind, commandExit, exitBeforeOutput }));
+        if (selected === 'quiet-parent') {
+            const push = children.find(value => value.kind === 'push')!;
+            assert.equal(push.commandExit, 2); assert.equal(push.exitBeforeOutput, true);
+        }
         proof.groupsClosedAtReturn = children.every(value => value.group.closed);
         proof.listenersAtReturn = await Promise.all([...ports].map(portListening));
         proof.directoriesRemovedAtReturn = await Promise.all([...new Set(children.map(value => value.directory))]
@@ -141,7 +163,9 @@ async function exercise(selected: string, proof: Record<string, unknown>) {
         const release = await preparationLock(resolve(repositoryDirectory, '.convex/backend-binary-cache'), { waitMs: 500 });
         await release(); proof.contenderAcquired = true;
     } finally {
-        for (const { group } of children.toReversed()) await stopGroup(group);
+        const stopped = await Promise.allSettled(children.map(({ group }) => stopGroup(group)));
+        const errors = stopped.filter(row => row.status === 'rejected').map(row => row.reason);
+        if (errors.length) throw new AggregateError(errors, 'Deadline fixture cleanup failed; state preserved');
         await Promise.race([running, sleep(3000)]);
         assert(settled, 'Fixture cleanup must settle setup');
         await backend?.close();
@@ -165,8 +189,8 @@ async function main() {
     process.env.AUCTION_BACKEND_SETUP_TIMEOUT_MS = '1000';
     try {
         const modes = process.argv.includes('--push-only') ? ['stall', 'success', 'reject', 'external']
-            : ['stall', 'success', 'reject', 'external', 'bootstrap-stall', 'readiness-stall', 'smoke-stall'];
-        for (const selected of modes) await check(`C47 ${selected} setup releases owned resources and the lock`,
+            : ['stall', 'success', 'reject', 'external', 'bootstrap-stall', 'readiness-stall', 'smoke-stall', 'quiet-parent'];
+        for (const selected of modes) await check(`${selected === 'quiet-parent' ? 'C48' : 'C47'} ${selected} setup releases owned resources and the lock`,
             proof => exercise(selected, proof));
     } finally {
         if (previous === undefined) delete process.env.AUCTION_BACKEND_SETUP_TIMEOUT_MS;

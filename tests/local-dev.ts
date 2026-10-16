@@ -3,9 +3,9 @@ import {
     copyEvidence as cp, makeEvidenceDirectory as mkdir, makeEvidenceTemporaryDirectory as mkdtemp,
     writeEvidenceFile as writeFile
 } from '../scripts/evidence';
-import { withResources, ownProcess, ownCleanup, stopOwnedProcess } from '../scripts/resources';
+import { withResources, spawnOwnedProcess, ownCleanup, stopOwnedProcess } from '../scripts/resources';
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { type ChildProcess } from 'node:child_process';
 import { rm, stat, symlink, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { ConvexHttpClient } from 'convex/browser';
@@ -38,10 +38,10 @@ async function main() {
         await Promise.all([requireClosedPort(port), requireClosedPort(sitePort)]);
     };
     const start = async () => {
-        child = ownProcess(spawn('npm', ['run', 'backend:local'], { cwd: directory, detached: true,
+        child = spawnOwnedProcess('npm', ['run', 'backend:local'], { cwd: directory, detached: true,
             env: { PATH: process.env.PATH, NODE_ENV: 'test', CONVEX_LOCAL_CLOUD_PORT: String(port),
                 CONVEX_LOCAL_SITE_PORT: String(sitePort), CONVEX_LOCAL_BACKEND_VERSION: isolatedBackendVersion },
-            stdio: ['ignore', 'pipe', 'pipe'] }), 'SIGTERM', true);
+            stdio: ['ignore', 'pipe', 'pipe'] }, 'SIGTERM');
         child.stdout!.on('data', data => { log += String(data); });
         child.stderr!.on('data', data => { log += String(data); });
         for (let attempt = 0; attempt < 600; attempt++) {
@@ -70,9 +70,9 @@ async function main() {
         assert((await stat(`${directory}/.env.local`)).size > 0);
         const frontendPort = await freePort();
         proof.frontendPort = frontendPort;
-        frontend = ownProcess(spawn('npm', ['run', 'dev', '--', '--webpack', '--port', String(frontendPort)],
+        frontend = spawnOwnedProcess('npm', ['run', 'dev', '--', '--webpack', '--port', String(frontendPort)],
             { cwd: directory, detached: true, env: { PATH: process.env.PATH, NODE_ENV: 'development' },
-                stdio: ['ignore', 'pipe', 'pipe'] }), 'SIGTERM', true);
+                stdio: ['ignore', 'pipe', 'pipe'] }, 'SIGTERM');
         frontend.stdout!.on('data', data => { frontendLog += String(data); });
         frontend.stderr!.on('data', data => { frontendLog += String(data); });
         let frontendLoadedUrl = false;
@@ -112,17 +112,19 @@ async function main() {
     } finally {
         if (previousDirectory === undefined) delete process.env.CONVEX_LOCAL_DIR;
         else process.env.CONVEX_LOCAL_DIR = previousDirectory;
+        const errors: unknown[] = [];
         if (frontend) {
-            await stopOwnedProcess(frontend);
-            await requireClosedPort(proof.frontendPort as number);
+            try { await stopOwnedProcess(frontend); await requireClosedPort(proof.frontendPort as number); }
+            catch (error) { errors.push(error); }
         }
-        await stop();
-        proof.nativePortsClosed = true;
-        await rm(directory, { recursive: true, force: true });
-        proof.directoryRemoved = true;
+        try { await stop(); proof.nativePortsClosed = true; }
+        catch (error) { errors.push(error); }
+        proof.directoryRemoved = false;
+        if (!errors.length) { await rm(directory, { recursive: true, force: true }); proof.directoryRemoved = true; }
         await writeFile(`${root}/local-workflow.log`, log);
         await writeFile(`${root}/local-frontend.log`, frontendLog);
         await writeFile(`${root}/local-workflow.json`, JSON.stringify(proof, null, 2));
+        if (errors.length) throw new AggregateError(errors, `Local workflow cleanup failed; state preserved at ${directory}`);
     }
 }
 withResources(main).catch(error => { console.error(error); process.exitCode = 1; });

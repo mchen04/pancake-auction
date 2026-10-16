@@ -3,7 +3,7 @@ import {
     appendEvidenceFile as appendFile, copyEvidence as cp, makeEvidenceDirectory as mkdir,
     makeEvidenceTemporaryDirectory as mkdtemp, writeEvidenceFile as writeFile
 } from './evidence';
-import { ownCleanup, onceAsync, ownServer, listen, ownProcess, stopOwnedProcess } from './resources';
+import { ownCleanup, onceAsync, ownServer, listen, spawnOwnedProcess, stopOwnedProcess } from './resources';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readFile, rm, symlink } from 'node:fs/promises';
 import { createConnection, createServer } from 'node:net';
@@ -12,6 +12,12 @@ import { ConvexHttpClient } from 'convex/browser';
 import { makeFunctionReference } from 'convex/server';
 import { evidenceDirectory, repositoryDirectory } from './evidence';
 import { isolatedBackendVersion } from './local-version';
+
+class BackendCleanupError extends AggregateError {
+    constructor(errors: unknown[], public directory: string) {
+        super(errors, `Isolated backend cleanup failed; state preserved at ${directory}`);
+    }
+}
 
 export const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 export async function freePort(): Promise<number> {
@@ -58,7 +64,7 @@ export async function localBackend(label: string, fixtures = false) {
         ownCleanup(backend.close);
         return backend;
     } catch (error) {
-        await rm(directory, { recursive: true, force: true });
+        if (!(error instanceof BackendCleanupError)) await rm(directory, { recursive: true, force: true });
         throw error;
     }
 }
@@ -102,25 +108,42 @@ async function startBackend(label: string, fixtures: boolean, directory: string,
     let push: ChildProcess | undefined;
     const close = onceAsync(async () => {
         controller.abort(new Error('Isolated Convex setup stopped'));
-        if (push) await stopOwnedProcess(push);
-        if (bootstrap) await stopOwnedProcess(bootstrap);
-        if (child) await stopOwnedProcess(child);
+        const errors: unknown[] = [];
+        const groups = [];
+        for (const [role, process_] of [['push', push], ['bootstrap', bootstrap], ['backend', child]] as const) {
+            if (!process_) continue;
+            try {
+                await stopOwnedProcess(process_);
+                groups.push({ role, attempted: true, closed: true });
+            } catch (error) {
+                errors.push(error);
+                groups.push({ role, attempted: true, closed: false, error: String(error) });
+            }
+        }
         let nativePortsClosed = false;
         try {
             await Promise.all([requireClosedPort(port), requireClosedPort(sitePort)]);
             nativePortsClosed = true;
-            await writeFile(`${evidence}/backend-${label}.log`, log);
-        } finally {
-            await rm(directory, { recursive: true, force: true });
-            await appendFile(`${evidence}/local-backends.jsonl`, JSON.stringify({ label, action: 'close',
-                pid: child?.pid, port, sitePort, directoryRemoved: true, nativePortsClosed }) + '\n');
+        } catch (error) { errors.push(error); }
+        try { await writeFile(`${evidence}/backend-${label}.log`, log); }
+        catch (error) { errors.push(error); }
+        let directoryRemoved = false;
+        if (!errors.length) {
+            try { await rm(directory, { recursive: true, force: true }); directoryRemoved = true; }
+            catch (error) { errors.push(error); }
         }
+        try {
+            await appendFile(`${evidence}/local-backends.jsonl`, JSON.stringify({ label, action: 'close',
+                pid: child?.pid, port, sitePort, directoryRemoved, nativePortsClosed, groups,
+                statePreserved: !directoryRemoved }) + '\n');
+        } catch (error) { errors.push(error); }
+        if (errors.length) throw new BackendCleanupError(errors, directory);
     });
     try {
-        bootstrap = ownProcess(spawn(process.execPath, ['--import', preload, '-e', '', '--', 'dev',
+        bootstrap = spawnOwnedProcess(process.execPath, ['--import', preload, '-e', '', '--', 'dev',
             '--local-cloud-port', String(port), '--local-site-port', String(sitePort),
             '--local-backend-version', isolatedBackendVersion],
-        { cwd: directory, env: environment, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }), 'SIGTERM', true);
+        { cwd: directory, env: environment, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }, 'SIGTERM');
         bootstrap.stdout!.on('data', data => { log += String(data); });
         bootstrap.stderr!.on('data', data => { log += String(data); });
         const prepared = await withinSetup(new Promise((resolve, reject) => {
@@ -132,11 +155,11 @@ async function startBackend(label: string, fixtures: boolean, directory: string,
         const state = `${directory}/.convex/local/default`;
         const configuration = JSON.parse(await withinSetup(readFile(`${state}/config.json`, 'utf8')));
         const binary = resolve(cache, 'binaries', isolatedBackendVersion, 'convex-local-backend');
-        child = ownProcess(spawn(binary, ['--port', String(port), '--site-proxy-port', String(sitePort),
+        child = spawnOwnedProcess(binary, ['--port', String(port), '--site-proxy-port', String(sitePort),
             '--instance-name', configuration.deploymentName, '--instance-secret', configuration.instanceSecret,
             '--local-storage', `${state}/convex_local_storage`, `${state}/convex_local_backend.sqlite3`],
         { cwd: directory, env: { PATH: process.env.PATH, NODE_ENV: 'test' }, detached: true,
-            stdio: 'ignore' }), 'SIGTERM', true);
+            stdio: 'ignore' }, 'SIGTERM');
         let startupError: Error | undefined;
         child.once('error', error => { startupError = new Error(`Cannot start the isolated local backend: ${error.message}`); });
         let ready = false;
@@ -158,10 +181,10 @@ async function startBackend(label: string, fixtures: boolean, directory: string,
         }
         if (!ready) throw new Error(`Local Convex did not start: ${log}`);
         if (instanceName !== configuration.deploymentName) throw new Error('Isolated Convex backend identity mismatch');
-        push = ownProcess(spawn(process.execPath, ['--import', preload, cli, 'dev', '--url', url,
+        push = spawnOwnedProcess(process.execPath, ['--import', preload, cli, 'dev', '--url', url,
             '--admin-key', configuration.adminKey, '--once', '--typecheck', 'disable', '--codegen', 'disable',
             '--tail-logs', 'disable'], { cwd: directory, env: environment, detached: true,
-                stdio: ['ignore', 'pipe', 'pipe'] }), 'SIGINT', true);
+                stdio: ['ignore', 'pipe', 'pipe'] }, 'SIGINT');
         let pushLog = '';
         push.stdout!.on('data', data => { pushLog += String(data); });
         push.stderr!.on('data', data => { pushLog += String(data); });
@@ -199,7 +222,11 @@ async function startBackend(label: string, fixtures: boolean, directory: string,
             pid: child.pid, ...identity }) + '\n');
         return { client, admin, close, url, identity };
     } catch (error) {
-        await close();
+        try { await close(); }
+        catch (cleanupError) {
+            const errors = cleanupError instanceof AggregateError ? cleanupError.errors : [cleanupError];
+            throw new BackendCleanupError([error, ...errors], directory);
+        }
         throw error;
     } finally {
         clearTimeout(timer);
