@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { access, chmod, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
@@ -56,6 +56,36 @@ async function removeAbandonedDownloads(cache) {
         if (abandoned) await rm(path, { recursive: true, force: true });
     }
 }
+async function reuseConfiguration(path, version) {
+    let text;
+    try { text = await readFile(path, 'utf8'); }
+    catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    let value;
+    try { value = JSON.parse(text); } catch {}
+    const port = value => Number.isInteger(value) && value >= 0 && value <= 65535;
+    if (value && typeof value.deploymentName === 'string' && value.deploymentName.length > 0
+        && value.backendVersion === version && typeof value.instanceSecret === 'string'
+        && /^[a-f0-9]{64}$/.test(value.instanceSecret) && typeof value.adminKey === 'string' && value.adminKey.length > 0
+        && port(value.ports?.cloud) && port(value.ports?.site)) return true;
+    await rename(path, `${path}.invalid-${Date.now()}-${randomUUID()}`);
+    return false;
+}
+async function clearConfigurationTemps(state, version) {
+    for (const name of await readdir(state)) {
+        if (name.startsWith(`.config-${version}-`) && (await lstat(`${state}/${name}`)).isFile()) {
+            await rm(`${state}/${name}`);
+        }
+    }
+}
+async function publishConfiguration(state, configuration, version, value) {
+    const temporary = `${state}/.config-${version}-${randomUUID()}`;
+    try {
+        await writeFile(temporary, JSON.stringify(value), { flag: 'wx', mode: 0o600 });
+        const handle = await open(temporary, 'r+');
+        try { await handle.sync(); } finally { await handle.close(); }
+        await rename(temporary, configuration);
+    } finally { await rm(temporary, { force: true }); }
+}
 export async function preparePinnedDeployment(version) {
     if (!/^[a-zA-Z0-9._-]+$/.test(version)) throw new Error('Invalid pinned backend version');
     const project = process.cwd();
@@ -93,7 +123,10 @@ export async function preparePinnedDeployment(version) {
                 throw new Error(`Pinned Convex backend ${version} is not cached and cannot be downloaded.`);
             } finally { await rm(temporary, { recursive: true, force: true }); }
         }
-        if (await access(configuration).then(() => true, () => false)) return;
+        if (localRuntime) await mkdir(state, { recursive: true });
+        else await makeEvidenceDirectory(state, { recursive: true });
+        await clearConfigurationTemps(state, version);
+        if (await reuseConfiguration(configuration, version)) return;
         const deploymentName = `anonymous-${randomUUID().replaceAll('-', '')}`;
         const instanceSecret = randomBytes(32).toString('hex');
         let adminKey;
@@ -107,10 +140,8 @@ export async function preparePinnedDeployment(version) {
         const value = { deploymentName, backendVersion: version, instanceSecret, adminKey,
             ports: { cloud: port('--local-cloud-port'), site: port('--local-site-port') } };
         if (localRuntime) {
-            await mkdir(state, { recursive: true });
-            await writeFile(configuration, JSON.stringify(value), { mode: 0o600, flag: 'wx' });
+            await publishConfiguration(state, configuration, version, value);
         } else {
-            await makeEvidenceDirectory(state, { recursive: true });
             await writeEvidenceFile(configuration, JSON.stringify(value));
         }
     } finally { await release(); }

@@ -21,7 +21,7 @@
     "test:room": "tsx tests/ui-import.ts",
     "test:layout": "tsx tests/layout.ts",
     "backend:local": "tsx scripts/local-dev.ts",
-    "test:local": "tsx tests/process-groups.ts && node tests/bootstrap-cache.mjs && node tests/bootstrap-concurrency.mjs && tsx tests/preparation-lock.ts && tsx tests/backend-network.ts && tsx tests/local-dev.ts && tsx tests/setup-cleanup.ts"
+    "test:local": "tsx tests/process-groups.ts && node tests/bootstrap-cache.mjs && node tests/bootstrap-concurrency.mjs && node tests/bootstrap-config.mjs && tsx tests/preparation-lock.ts && tsx tests/backend-network.ts && tsx tests/local-dev.ts && tsx tests/setup-cleanup.ts"
   },
   "dependencies": {
     "convex": "^1.46.0",
