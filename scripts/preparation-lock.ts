@@ -8,7 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 const execute = promisify(execFile);
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 type Owner = { host: string; pid: number; processStart?: string; startedAt?: number; token?: string };
-type Options = { waitMs?: number; graceMs?: number; pollMs?: number };
+type Options = { waitMs?: number; graceMs?: number; pollMs?: number; name?: 'prepare.lock' | 'publish.lock' };
 async function snapshot(path: string) {
     const stat = await lstat(path).catch(error => {
         if (error.code !== 'ENOENT') throw error;
@@ -49,9 +49,9 @@ function retirementMutex(path: string) {
         finally { database.close(); }
     };
 }
-async function sweepPreparation(cache: string) {
+async function sweepPreparation(cache: string, lockName: string) {
     for (const name of await readdir(cache)) {
-        if (!['prepare.lock.candidate-', 'prepare.lock.retired-'].some(prefix => name.startsWith(prefix))) continue;
+        if (![`${lockName}.candidate-`, `${lockName}.retired-`].some(prefix => name.startsWith(prefix))) continue;
         const path = `${cache}/${name}`;
         const stat = await lstat(path).catch(() => null);
         if (!stat?.isDirectory() || Date.now() - stat.mtimeMs < 24 * 60 * 60 * 1000) continue;
@@ -61,7 +61,8 @@ async function sweepPreparation(cache: string) {
     }
 }
 export async function preparationLock(cache: string, options: Options = {}) {
-    const path = `${cache}/prepare.lock`;
+    const lockName = options.name ?? 'prepare.lock';
+    const path = `${cache}/${lockName}`;
     const owner: Owner = { host: hostname(), pid: process.pid, startedAt: Date.now(), token: randomUUID(),
         processStart: (await execute('ps', ['-p', String(process.pid), '-o', 'lstart='])).stdout.trim() };
     const candidate = `${path}.candidate-${owner.token}`;
@@ -88,7 +89,7 @@ export async function preparationLock(cache: string, options: Options = {}) {
                             await rm(path, { recursive: true, force: true });
                         }
                     };
-                    try { await sweepPreparation(cache); }
+                    try { await sweepPreparation(cache, lockName); }
                     catch (error) { await release(); throw error; }
                     return release;
                 }

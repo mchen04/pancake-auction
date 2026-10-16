@@ -5,6 +5,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { preparationLock } from './preparation-lock.ts';
 import { repositoryDirectory, makeEvidenceDirectory, writeEvidenceFile } from './evidence.ts';
 
 const execute = promisify(execFile);
@@ -64,50 +65,53 @@ export async function preparePinnedDeployment(version) {
     const cache = resolve(process.env.AUCTION_CLI_HOME, '.cache/convex/binaries', version);
     const binary = `${cache}/convex-local-backend`;
     await mkdir(cache, { recursive: true });
-    await removeAbandonedDownloads(cache);
-    if (!await validBinary(binary)) {
-        await rm(binary, { force: true });
-        const platforms = { darwin: 'apple-darwin', linux: 'unknown-linux-gnu' };
-        const arches = { arm64: 'aarch64', x64: 'x86_64' };
-        const target = `${arches[process.arch]}-${platforms[process.platform]}`;
-        const temporary = await mkdtemp(`${cache}/download-`);
-        try {
-            await writeFile(`${temporary}/owner.json`, JSON.stringify({ host: hostname(), pid: process.pid,
-                processStart: (await execute('ps', ['-p', String(process.pid), '-o', 'lstart='])).stdout.trim() }),
-            { flag: 'wx' });
-            if (!platforms[process.platform] || !arches[process.arch]) throw new Error('Unsupported local platform');
-            const archive = `convex-local-backend-${target}.zip`;
-            const response = await fetch(`https://github.com/get-convex/convex-backend/releases/download/${version}/${archive}`,
-                { signal: AbortSignal.timeout(30000) });
-            if (!response.ok) throw new Error(`Binary download returned ${response.status}`);
-            await writeFile(`${temporary}/backend.zip`, new Uint8Array(await response.arrayBuffer()));
-            await execute('/usr/bin/unzip', ['-q', `${temporary}/backend.zip`, 'convex-local-backend', '-d', temporary]);
-            const extracted = `${temporary}/convex-local-backend`;
-            await chmod(extracted, 0o700);
-            if (!await validBinary(extracted)) throw new Error('Downloaded backend failed validation');
-            await rename(extracted, binary);
-        } catch {
-            throw new Error(`Pinned Convex backend ${version} is not cached and cannot be downloaded.`);
-        } finally { await rm(temporary, { recursive: true, force: true }); }
-    }
-    if (await access(configuration).then(() => true, () => false)) return;
-    const deploymentName = `anonymous-${randomUUID().replaceAll('-', '')}`;
-    const instanceSecret = randomBytes(32).toString('hex');
-    let adminKey;
+    const release = await preparationLock(cache, { name: 'publish.lock' });
     try {
-        const result = await execute(binary, ['keygen', 'admin-key', '--instance-name', deploymentName,
-            '--instance-secret', instanceSecret]);
-        adminKey = result.stdout.trim();
-        if (!adminKey) throw new Error('Empty generated key');
-    } catch { throw new Error(`Pinned Convex backend ${version} cannot generate local credentials.`); }
-    const port = name => Number(process.argv[process.argv.indexOf(name) + 1]);
-    const value = { deploymentName, backendVersion: version, instanceSecret, adminKey,
-        ports: { cloud: port('--local-cloud-port'), site: port('--local-site-port') } };
-    if (localRuntime) {
-        await mkdir(state, { recursive: true });
-        await writeFile(configuration, JSON.stringify(value), { mode: 0o600, flag: 'wx' });
-    } else {
-        await makeEvidenceDirectory(state, { recursive: true });
-        await writeEvidenceFile(configuration, JSON.stringify(value));
-    }
+        await removeAbandonedDownloads(cache);
+        if (!await validBinary(binary)) {
+            await rm(binary, { force: true });
+            const platforms = { darwin: 'apple-darwin', linux: 'unknown-linux-gnu' };
+            const arches = { arm64: 'aarch64', x64: 'x86_64' };
+            const target = `${arches[process.arch]}-${platforms[process.platform]}`;
+            const temporary = await mkdtemp(`${cache}/download-`);
+            try {
+                await writeFile(`${temporary}/owner.json`, JSON.stringify({ host: hostname(), pid: process.pid,
+                    processStart: (await execute('ps', ['-p', String(process.pid), '-o', 'lstart='])).stdout.trim() }),
+                { flag: 'wx' });
+                if (!platforms[process.platform] || !arches[process.arch]) throw new Error('Unsupported local platform');
+                const archive = `convex-local-backend-${target}.zip`;
+                const response = await fetch(`https://github.com/get-convex/convex-backend/releases/download/${version}/${archive}`,
+                    { signal: AbortSignal.timeout(30000) });
+                if (!response.ok) throw new Error(`Binary download returned ${response.status}`);
+                await writeFile(`${temporary}/backend.zip`, new Uint8Array(await response.arrayBuffer()));
+                await execute('/usr/bin/unzip', ['-q', `${temporary}/backend.zip`, 'convex-local-backend', '-d', temporary]);
+                const extracted = `${temporary}/convex-local-backend`;
+                await chmod(extracted, 0o700);
+                if (!await validBinary(extracted)) throw new Error('Downloaded backend failed validation');
+                await rename(extracted, binary);
+            } catch {
+                throw new Error(`Pinned Convex backend ${version} is not cached and cannot be downloaded.`);
+            } finally { await rm(temporary, { recursive: true, force: true }); }
+        }
+        if (await access(configuration).then(() => true, () => false)) return;
+        const deploymentName = `anonymous-${randomUUID().replaceAll('-', '')}`;
+        const instanceSecret = randomBytes(32).toString('hex');
+        let adminKey;
+        try {
+            const result = await execute(binary, ['keygen', 'admin-key', '--instance-name', deploymentName,
+                '--instance-secret', instanceSecret]);
+            adminKey = result.stdout.trim();
+            if (!adminKey) throw new Error('Empty generated key');
+        } catch { throw new Error(`Pinned Convex backend ${version} cannot generate local credentials.`); }
+        const port = name => Number(process.argv[process.argv.indexOf(name) + 1]);
+        const value = { deploymentName, backendVersion: version, instanceSecret, adminKey,
+            ports: { cloud: port('--local-cloud-port'), site: port('--local-site-port') } };
+        if (localRuntime) {
+            await mkdir(state, { recursive: true });
+            await writeFile(configuration, JSON.stringify(value), { mode: 0o600, flag: 'wx' });
+        } else {
+            await makeEvidenceDirectory(state, { recursive: true });
+            await writeEvidenceFile(configuration, JSON.stringify(value));
+        }
+    } finally { await release(); }
 }
