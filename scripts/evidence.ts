@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import { constants, type MakeDirectoryOptions, type WriteFileOptions, type TimeLike } from 'node:fs';
-import { lstat, mkdir, mkdtemp, open, readFile, readdir, readlink, rm, symlink } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, open, readFile, readdir, readlink, rename, rm, symlink } from 'node:fs/promises';
 import type { BuildOptions, build as esbuild } from 'esbuild';
 import { lstatSync, readlinkSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
@@ -57,23 +58,48 @@ export async function makeEvidenceTemporaryDirectory(prefix: string) {
     const directory = await mkdtemp(target);
     return evidenceDirectory(directory, true)!;
 }
+async function checkedHandle(target: string, handle: Awaited<ReturnType<typeof open>>, rejectLinks: boolean) {
+    evidenceFile(target);
+    const [actual, expected] = await Promise.all([handle.stat(), lstat(target)]);
+    if (actual.dev !== expected.dev || actual.ino !== expected.ino) throw new Error('Evidence target changed');
+    if (rejectLinks && actual.nlink > 1) throw new Error('Evidence append and timestamps reject hard links');
+}
 export async function openEvidenceOutput(value: string, append = false, mode: number | string = 0o600) {
     const target = evidenceFile(value);
-    const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW | (append ? constants.O_APPEND : 0);
-    const handle = await open(target, flags, mode);
+    const temporary = append ? target : evidenceFile(`${dirname(target)}/.evidence-${randomUUID()}`);
+    const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW
+        | (append ? constants.O_APPEND : constants.O_EXCL);
+    const handle = await open(temporary, flags, mode);
+    let closed = false;
+    async function finish(commit: boolean) {
+        if (closed) return;
+        closed = true;
+        try {
+            if (commit) await checkedHandle(temporary, handle, true);
+            await handle.close();
+            if (commit && !append) {
+                if (evidenceFile(value) !== target) throw new Error('Evidence target changed');
+                await rename(temporary, target);
+            }
+        } finally {
+            await handle.close();
+            if (!append) await rm(temporary, { force: true });
+        }
+    }
     try {
-        evidenceFile(target);
-        const [actual, expected] = await Promise.all([handle.stat(), lstat(target)]);
-        if (actual.dev !== expected.dev || actual.ino !== expected.ino) throw new Error('Evidence target changed');
-        if (!append) await handle.truncate(0);
-        return handle;
-    } catch (error) { await handle.close(); throw error; }
+        await checkedHandle(temporary, handle, true);
+        return { fd: handle.fd,
+            writeFile: async (data: EvidenceData, options?: WriteFileOptions) => {
+                await checkedHandle(temporary, handle, true);
+                await handle.writeFile(data, options);
+            }, close: () => finish(true), abort: () => finish(false) };
+    } catch (error) { await finish(false); throw error; }
 }
 async function writeChecked(value: string, data: EvidenceData, options: WriteFileOptions | undefined, append: boolean) {
     const mode = typeof options === 'object' && options !== null ? options.mode : undefined;
     const handle = await openEvidenceOutput(value, append, mode);
-    try { await handle.writeFile(data, options); }
-    finally { await handle.close(); }
+    try { await handle.writeFile(data, options); await handle.close(); }
+    catch (error) { await handle.abort(); throw error; }
 }
 type EvidenceData = Parameters<Awaited<ReturnType<typeof open>>['writeFile']>[0];
 export async function writeEvidenceFile(value: string, data: EvidenceData, options?: WriteFileOptions) {
@@ -119,8 +145,7 @@ export async function setEvidenceTimes(value: string, atime: TimeLike, mtime: Ti
     const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
         evidenceFile(target);
-        const [actual, expected] = await Promise.all([handle.stat(), lstat(target)]);
-        if (actual.dev !== expected.dev || actual.ino !== expected.ino) throw new Error('Evidence target changed');
+        await checkedHandle(target, handle, true);
         await handle.utimes(atime, mtime);
     } finally { await handle.close(); }
 }
