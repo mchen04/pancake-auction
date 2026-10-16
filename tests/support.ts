@@ -81,9 +81,17 @@ export const restoreSeat = (token: string) => currentClient().restore(token);
 export const configure = (args: Record<string, unknown>) => currentBackend().admin('testOnly:configure', args);
 export const inspect = () => currentBackend().admin('admin:inspect');
 export async function seedManagers() { await currentBackend().admin('admin:managers'); }
-export async function seedPlayers(players = syntheticPool()) {
-    await currentBackend().admin('admin:importPlayers', { players, fetchedAt: new Date().toISOString(),
-        startedAt: Date.now(), sources: ['recorded-test-fixture'], counts: { pool: players.length }, coverage: {} });
+export interface SeedMetadata {
+    fetchedAt: string;
+    sources: string[];
+    counts?: unknown;
+    coverage?: unknown;
+}
+export async function seedPlayers(players = syntheticPool(), metadata?: SeedMetadata) {
+    await currentBackend().admin('admin:importPlayers', { players,
+        fetchedAt: metadata?.fetchedAt ?? new Date().toISOString(), startedAt: Date.now(),
+        sources: metadata?.sources ?? ['recorded-test-fixture'],
+        counts: metadata?.counts ?? { pool: players.length }, coverage: metadata?.coverage ?? {} });
 }
 export async function events(): Promise<LoggedEvent[]> {
     const data = await inspect();

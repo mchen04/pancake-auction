@@ -3,7 +3,8 @@ import { evidenceDirectory, repositoryDirectory } from "./evidence";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 
-import poolFixture from "../tests/fixtures/sleeper-pool.json";
+import { recordedPool } from "./pool-source";
+import type { SeedMetadata } from "../tests/support";
 import { safeError } from "./env";
 import { auditDraft } from "./audit";
 import { Bot } from "./bot";
@@ -39,9 +40,6 @@ async function build(evidence: string) {
     const code = await new Promise(resolve => child.once("exit", resolve));
     await writeFile(`${evidence}/sim/build.log`, chunks.join(""));
     assert.equal(code, 0, "Production build must pass");
-}
-async function importedPool() {
-    return { players: poolFixture.players as Player[], source: `recorded Sleeper pool (${poolFixture.fetchedAt})` };
 }
 function reservedEndgamePlayers(players: Player[]) {
     const lowFirst = [...players].sort((a, b) => (a.projection ?? -Infinity) - (b.projection ?? -Infinity));
@@ -369,7 +367,7 @@ class DraftDriver {
         }
     }
 }
-async function runDraft(run: number, pool: Player[], source: string, evidence: string) {
+async function runDraft(run: number, pool: Player[], source: string, evidence: string, importMetadata: SeedMetadata) {
     const started = Date.now();
     const schema = await createIsolated("sim");
     let bots: Bot[] = [];
@@ -378,11 +376,12 @@ async function runDraft(run: number, pool: Player[], source: string, evidence: s
         seed,
         timing,
         source,
+        importMetadata,
         leagueConfig: "league/managers.json",
         clients: 10
     };
     try {
-        await seedPlayers(pool);
+        await seedPlayers(pool, importMetadata);
         await seedManagers();
         if (timing === 'fast') {
             await configure({ draft: { nominationMs: 3000, biddingMs: 3000, extensionMs: 1500, capMs: 4500 } });
@@ -474,13 +473,13 @@ async function main() {
     await mkdir(`${evidence}/sim`, {
         recursive: true
     });
-    const { players, source } = await importedPool();
+    const { players, source, importMetadata } = recordedPool();
     if (!process.argv.includes("--skip-build")) {
         await build(evidence);
     }
     if (runs === 1) {
         const run = Number(option('--run-index', '1'));
-        await runDraft(run, players, source, evidence);
+        await runDraft(run, players, source, evidence, importMetadata);
         await recordSpread([`${evidence}/sim/run-${timing}-${seed}-${run}.json`]);
     } else {
         for (let first = 1; first <= runs; first += 3) {
