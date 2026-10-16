@@ -8,7 +8,7 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { createIsolated, dropIsolated, seedManagers, seedPlayers, claimSeat,
-    currentBackend, currentClient, getState, sleep, syntheticPool } from './support';
+    currentBackend, currentClient, getState, sleep, syntheticPool, configure } from './support';
 
 
 const execute = promisify(execFile);
@@ -40,6 +40,8 @@ async function main() {
         format: 'iife', platform: 'browser', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' } });
     const isolated = await createIsolated('test');
     await seedManagers(); await seedPlayers(syntheticPool());
+    assert.equal((await getState()).draft.nominationMs, 10000);
+    await configure({ draft: { nominationMs: 60000 } });
     const commissionerToken = await claimSeat(1);
     const otherToken = await claimSeat(2);
     let token = commissionerToken;
@@ -88,6 +90,13 @@ async function main() {
             while((await getState()).recentEvents.findIndex(event=>event.type==='turn')<28)await move();
             await currentClient().act({type:'resume'},commissionerToken);
             await until(`document.querySelector('.headline').classList.contains('running')`);
+            const delay = Number(process.env.OPENING_TEST_DELAY_MS ?? 0);
+            if (delay) await sleep(delay);
+            const interactive = await getState();
+            await writeFile(`${evidence}/interactive-turn.json`, JSON.stringify({ draft: interactive.draft,
+                serverNow: interactive.serverNow, delay, events: interactive.recentEvents }, null, 2));
+            assert.equal(interactive.draft.phase, 'nomination');
+            assert.equal(interactive.draft.nominatorId, started.draft.nominatorId);
             await browser('click','.tabbar button:nth-child(4)');
             await until(`document.querySelector('.room').dataset.tab==='results'`);
             await browser('fill','input[aria-label="Opening bid"]','25');
