@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { spawn, execFileSync } from 'node:child_process';
+import childProcesses, { spawn, execFileSync } from 'node:child_process';
 import filesystem, { access, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { promisify } from 'node:util';
 import { syncBuiltinESMExports } from 'node:module';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -16,9 +17,22 @@ if (process.argv[2] === '--worker') {
     process.env.AUCTION_CLI_HOME = home;
     globalThis.fetch = async () => {
         process.send({ download: true });
-        if (fault === 'offline') throw new Error('Fixture network blocked');
+        if (['offline', 'spawn-resource'].includes(fault)) throw new Error('Fixture network blocked');
         return new Response(await readFile(archive), { status: 200 });
     };
+    if (fault === 'spawn-resource') {
+        const original = childProcesses.execFile;
+        const execute = promisify(original);
+        const replacement = (...args) => original(...args);
+        replacement[promisify.custom] = (file, ...args) => {
+            if (file.endsWith('/convex-local-backend')) {
+                return Promise.reject(Object.assign(new Error('Injected spawn capacity failure'), { code: 'EAGAIN' }));
+            }
+            return execute(file, ...args);
+        };
+        childProcesses.execFile = replacement;
+        syncBuiltinESMExports();
+    }
     if (fault === 'publication') {
         const originalCopy = filesystem.copyFile;
         filesystem.copyFile = async (source, destination, flags) => {
@@ -125,6 +139,61 @@ if (process.argv[2] === '--worker') {
             const retry = await start(project, home).closed;
             assert.equal(retry.code, 0, retry.output); assert.equal(retry.downloads, 1); return retry;
         });
+        await check('Inconclusive cached validation timeout preserves the binary without fetching',
+            async ({ project, home, cache, binary }) => {
+                await mkdir(cache, { recursive: true });
+                const marker = `${home}/validation-started`;
+                const code = `const fs=require('node:fs');const marker=${JSON.stringify(marker)};
+                    const print=()=>process.stdout.write('isolated-fixture-key');
+                    if(fs.existsSync(marker))print();else{fs.writeFileSync(marker,'started');setTimeout(print,6000)}`;
+                const quote = value => "'" + value.replaceAll("'", "'\"'\"'") + "'";
+                const slow = `#!/bin/sh\nexec ${quote(process.execPath)} -e ${quote(code)}\n` + ' '.repeat(2048);
+                await writeFile(binary, slow, { mode: 0o700 });
+                const started = performance.now();
+                const first = await start(project, home, 'offline').closed;
+                const observed = { first, elapsedMs: performance.now() - started,
+                    binaryPreserved: await readFile(binary, 'utf8').then(value => value === slow, () => false) };
+                await writeEvidenceFile(`${root}/validation-timeout.json`, JSON.stringify(observed, null, 2));
+                assert(observed.binaryPreserved, 'Inconclusive validation must preserve the cached binary');
+                assert.equal(first.code, 1); assert.equal(first.downloads, 0);
+                assert(first.output.includes('Could not validate cached backend; try again.'), first.output);
+                assert(observed.elapsedMs >= 5000 && observed.elapsedMs < 8000);
+                const retry = await start(project, home, 'offline').closed;
+                assert.equal(retry.code, 0, retry.output); assert.equal(retry.downloads, 0);
+                assert.equal(await readFile(binary, 'utf8'), slow);
+                return { ...observed, retry };
+            });
+        await check('Inconclusive signal-killed cached validation preserves the binary without fetching',
+            async ({ project, home, cache, binary }) => {
+                await mkdir(cache, { recursive: true });
+                const code = "process.kill(process.pid,'SIGKILL')";
+                const killed = `#!/bin/sh\nexec "${process.execPath}" -e "${code}"\n` + ' '.repeat(2048);
+                await writeFile(binary, killed, { mode: 0o700 });
+                const failed = await start(project, home, 'offline').closed;
+                assert.equal(await readFile(binary, 'utf8').catch(() => null), killed);
+                assert.equal(failed.code, 1); assert.equal(failed.downloads, 0);
+                assert(failed.output.includes('Could not validate cached backend; try again.'), failed.output);
+                return failed;
+            });
+        await check('Inconclusive injected EAGAIN preserves the binary without fetching',
+            async ({ project, home, cache, binary }) => {
+                await mkdir(cache, { recursive: true }); await writeFile(binary, fixture, { mode: 0o700 });
+                const failed = await start(project, home, 'spawn-resource').closed;
+                assert.equal(await readFile(binary, 'utf8').catch(() => null), fixture);
+                assert.equal(failed.code, 1); assert.equal(failed.downloads, 0);
+                assert(failed.output.includes('Could not validate cached backend; try again.'), failed.output);
+                const retry = await start(project, home, 'offline').closed;
+                assert.equal(retry.code, 0, retry.output); assert.equal(retry.downloads, 0);
+                return { failed, retry, semantics: 'Injected execFile EAGAIN; actual bootstrap and real cached file' };
+            });
+        await check('Definite empty-output validation still replaces the cached binary',
+            async ({ project, home, cache, binary }) => {
+                await mkdir(cache, { recursive: true });
+                await writeFile(binary, '#!/bin/sh\nexit 0\n' + ' '.repeat(2048), { mode: 0o700 });
+                const retry = await start(project, home).closed;
+                assert.equal(retry.code, 0, retry.output); assert.equal(retry.downloads, 1);
+                assert.equal(await readFile(binary, 'utf8'), fixture); return retry;
+            });
         await check('C38 impossible recovery fails clearly within its bound', async ({ project, home, cache, binary }) => {
             await mkdir(cache, { recursive: true }); await writeFile(binary, '#!/b', { mode: 0o600 });
             const started = performance.now();

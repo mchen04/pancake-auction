@@ -13,13 +13,29 @@ async function generatesKey(binary) {
         '--instance-secret', '0'.repeat(64)], { timeout: 5000 });
     return Boolean(result.stdout.trim());
 }
+function inconclusiveValidation() {
+    return new Error('Could not validate cached backend; try again.');
+}
 async function validBinary(binary) {
-    try {
-        const stat = await lstat(binary);
-        if (!stat.isFile() || stat.size < 1024) return false;
-        await access(binary, constants.X_OK);
-        return await generatesKey(binary);
-    } catch { return false; }
+    let stat;
+    try { stat = await lstat(binary); }
+    catch (error) {
+        if (['ENOENT', 'ENOTDIR'].includes(error.code)) return false;
+        throw inconclusiveValidation();
+    }
+    if (!stat.isFile() || stat.size < 1024) return false;
+    try { await access(binary, constants.X_OK); }
+    catch (error) {
+        if (['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error.code)) return false;
+        throw inconclusiveValidation();
+    }
+    try { return await generatesKey(binary); }
+    catch (error) {
+        if (error.killed || error.signal) throw inconclusiveValidation();
+        if (typeof error.code === 'number' && error.code !== 0
+            || ['ENOENT', 'ENOTDIR', 'ENOEXEC', 'EACCES', 'EPERM'].includes(error.code)) return false;
+        throw inconclusiveValidation();
+    }
 }
 async function removeAbandonedDownloads(cache) {
     for (const name of await readdir(cache)) {
