@@ -20,6 +20,7 @@ const require = createRequire(resolve('package.json'));
 const { build }: typeof import('esbuild') = require('esbuild');
 const session = `pancake-websocket-${crypto.randomUUID()}`;
 const interfere = makeFunctionReference<'mutation'>('testOnly:interfereDraft');
+const contentionRounds = 24;
 async function browser(...args: string[]) {
     return runBrowser(session,args,25000);
 }
@@ -53,7 +54,7 @@ async function main() {
     const disconnects: string[] = [];
     const bidders = Array.from({ length: 8 }, () => ownClient(new ConvexReactClient(backend.url,
         { logger: false, unsavedChangesWarning: false, onServerDisconnectError: message => disconnects.push(message) })));
-    const writers = Array.from({ length: 4 }, () => ownClient(new ConvexReactClient(backend.url,
+    const writers = Array.from({ length: 16 }, () => ownClient(new ConvexReactClient(backend.url,
         { logger: false, unsavedChangesWarning: false })));
     const proof: Record<string, unknown> = { backend: backend.identity, browserTransport: 'native WebSocket',
         httpTransport: 'ConvexHttpClient', adapterUsed: false };
@@ -133,82 +134,122 @@ async function main() {
         await browser('eval', 'window.transport.busyStates = []; window.transport.feedback = []; true');
         state = await http.state();
         const lotId = state.lot!.id;
-        const contention = await churn();
-        const attempts = bidders.map((client, index) => ({ managerId: index + 3, amount: 42,
-            result: client.mutation(api.auction.actOnDraft,
-                { token: tokens[index + 2], action: { type: 'bid', lotId, amount: 42 } }) }));
-        const outcomes = Promise.allSettled(attempts.map(async attempt => ({ managerId: attempt.managerId,
-            amount: attempt.amount, result: await attempt.result })));
-        await uiBid(60);
-        await until('window.transport.closes.some(close => close.code === 1013 '
-            + '&& close.reason.includes("OptimisticConcurrencyControlFailure"))');
-        const pending = await evaluate('window.transport.bids.filter(bid => bid.amount === 60)');
-        assert(pending.length >= 1);
-        await contention.stop();
-        const results = (await bounded(outcomes, 'Concurrent Node WebSocket bids')).map(result => {
-            if (result.status === 'rejected') throw result.reason;
-            return result.value;
-        });
-        for (const attempt of results) requireRuleResult(attempt.result);
-        await idle();
-        const wire = await evaluate('window.transport');
-        assert(wire.busyStates.includes(true) && wire.busyStates.at(-1) === false,
-            'The real page must enter and leave its busy state');
-        assert(wire.feedback.length > 0, 'The existing sending or reconnecting feedback must appear');
-        const browserErrors = await browser('errors');
-        assert.equal(browserErrors, '', 'A native reconnect must not crash the page');
-        const sends = wire.bids.filter((bid: { amount: number }) => bid.amount === 60);
-        assert(sends.length >= 2, 'The SDK must resend the in-flight native bid after the 1013 close');
-        assert.equal(new Set(sends.map((bid: { requestId: number }) => bid.requestId)).size, 1,
-            'A resend must retain its request id');
-        const response = wire.responses.find((result: { requestId: number }) => result.requestId === sends[0].requestId);
-        assert(response?.ok, 'The replayed browser bid must win against lower concurrent bids');
-        const inspected = await backend.admin('admin:inspect');
-        const bidEvents = inspected.events.filter((event: { type: string; lotId: number }) =>
-            event.type === 'bid' && event.lotId === lotId);
-        assert.equal(bidEvents.filter((event: { managerId: number; data: { amount: number } }) =>
-            event.managerId === 1 && event.data.amount === 10).length, 1, 'The healthy control also applies once');
-        assert(results.filter(attempt => !attempt.result.ok).length >= 7,
-            'Simultaneous equal bids must retain their rule-rejection control');
-        for (const attempt of [...results, { managerId: 1, amount: 60, result: response }]) {
-            const count = bidEvents.filter((event: { managerId: number; data: { amount: number } }) =>
-                event.managerId === attempt.managerId && event.data.amount === attempt.amount).length;
-            assert.equal(count, attempt.result.ok ? 1 : 0, 'Each intended bid commits once or has a rule rejection');
-        }
-        assert.equal((await http.state()).roster.length, 0, 'No sale occurs during the long test clock');
-        proof.nativeWebSocket = { attempts: results.map(attempt => ({ ...attempt, result: attempt.result.ok
-            ? { ok: true } : attempt.result })), browser: { response, sends, closes: wire.closes },
-            busyCleared: true, busyStates: wire.busyStates, feedback: wire.feedback, browserErrors,
-            noRawError: true, exactlyOnce: true, writerCommits: contention.count(), disconnects,
-            bidEvents: bidEvents.map((event: { id: number; managerId: number; data: { amount: number } }) =>
-                ({ id: event.id, managerId: event.managerId, amount: event.data.amount })) };
-        console.log('PASS Native draft contention resends intended bids and clears browser busy state without double apply');
-        const httpContention = await churn();
-        let requests = 0;
-        let aborts = 0;
-        const countedFetch: typeof fetch = async (input, init) => {
-            requests++;
-            const response = await fetch(input, init);
-            if (!response.ok) {
-                const error = await response.clone().json();
-                if (error.code === 'OptimisticConcurrencyControlFailure') {
-                    aborts++;
-                    await httpContention.stop();
-                }
+        const rounds: Record<string, unknown>[] = [];
+        proof.nativeRounds = rounds;
+        let conflictedAmount: number | undefined;
+        for (let index = 0; index < contentionRounds; index++) {
+            const amount = 60 + index * 20;
+            const equalAmount = 42 + index * 20;
+            if (index > 0) {
+                await http.act({ type: 'bid', lotId, amount: equalAmount - 1 }, tokens[1]);
+                await until('document.querySelector(".custom input")?.disabled === false');
             }
-            return response;
-        };
-        await bounded(new AuctionClient(backend.url, countedFetch)
-            .act({ type: 'bid', lotId, amount: 100 }, tokens[1]), 'HTTP bid retry');
-        await httpContention.stop();
-        assert.equal(aborts, 1, 'The real HTTP path must expose an aborted transaction');
-        assert.equal(requests, 2, 'The HTTP helper retries only the aborted attempt');
-        const afterHttp = await backend.admin('admin:inspect');
-        const httpBids = afterHttp.events.filter((event: { type: string; managerId: number; data: { amount: number } }) =>
-            event.type === 'bid' && event.managerId === 2 && event.data.amount === 100);
-        assert.equal(httpBids.length, 1);
-        proof.httpRetry = { requests, aborts, committedBids: httpBids.length,
-            eventId: httpBids[0].id, writerCommits: httpContention.count() };
+            await browser('eval', 'window.transport.busyStates = []; window.transport.feedback = []; true');
+            const contention = await churn();
+            const round: Record<string, unknown> = { round: index + 1, amount, equalAmount };
+            rounds.push(round);
+            const closesBefore = await evaluate('window.transport.closes.length');
+            const attempts = bidders.map((client, index) => ({ managerId: index + 3, amount: equalAmount,
+                result: client.mutation(api.auction.actOnDraft,
+                    { token: tokens[index + 2], action: { type: 'bid', lotId, amount: equalAmount } }) }));
+            const outcomes = Promise.allSettled(attempts.map(async attempt => ({ managerId: attempt.managerId,
+                amount: attempt.amount, result: await attempt.result })));
+            await uiBid(amount);
+            await until(`window.transport.closes.slice(${closesBefore}).some(close => close.code === 1013
+                && close.reason.includes("OptimisticConcurrencyControlFailure"))
+                || window.transport.responses.some(response => window.transport.bids.some(bid =>
+                    bid.amount === ${amount} && bid.requestId === response.requestId))`);
+            const observed = await evaluate('window.transport');
+            const conflicted = observed.closes.slice(closesBefore).some((close: { code: number; reason: string }) =>
+                close.code === 1013 && close.reason.includes('OptimisticConcurrencyControlFailure'));
+            Object.assign(round, { conflicted, beforeStop: observed, writerCommits: contention.count() });
+            const pending = observed.bids.filter((bid: { amount: number }) => bid.amount === amount);
+            assert(pending.length >= 1);
+            await contention.stop();
+            const results = (await bounded(outcomes, 'Concurrent Node WebSocket bids')).map(result => {
+                if (result.status === 'rejected') throw result.reason;
+                return result.value;
+            });
+            for (const attempt of results) requireRuleResult(attempt.result);
+            await idle();
+            const wire = await evaluate('window.transport');
+            assert(wire.busyStates.includes(true) && wire.busyStates.at(-1) === false,
+                'The real page must enter and leave its busy state');
+            if (conflicted) assert(wire.feedback.length > 0, 'The existing sending or reconnecting feedback must appear');
+            const browserErrors = await browser('errors');
+            assert.equal(browserErrors, '', 'A native reconnect must not crash the page');
+            const sends = wire.bids.filter((bid: { amount: number }) => bid.amount === amount);
+            if (conflicted) assert(sends.length >= 2, 'The SDK must resend the in-flight native bid after the 1013 close');
+            assert.equal(new Set(sends.map((bid: { requestId: number }) => bid.requestId)).size, 1,
+                'A resend must retain its request id');
+            const response = wire.responses.find((result: { requestId: number }) => result.requestId === sends[0].requestId);
+            assert(response?.ok, 'The replayed browser bid must win against lower concurrent bids');
+            const inspected = await backend.admin('admin:inspect');
+            const bidEvents = inspected.events.filter((event: { type: string; lotId: number }) =>
+                event.type === 'bid' && event.lotId === lotId);
+            assert.equal(bidEvents.filter((event: { managerId: number; data: { amount: number } }) =>
+                event.managerId === 1 && event.data.amount === 10).length, 1, 'The healthy control also applies once');
+            assert(results.filter(attempt => !attempt.result.ok).length >= 7,
+                'Simultaneous equal bids must retain their rule-rejection control');
+            for (const attempt of [...results, { managerId: 1, amount, result: response }]) {
+                const count = bidEvents.filter((event: { managerId: number; data: { amount: number } }) =>
+                    event.managerId === attempt.managerId && event.data.amount === attempt.amount).length;
+                assert.equal(count, attempt.result.ok ? 1 : 0, 'Each intended bid commits once or has a rule rejection');
+            }
+            assert.equal((await http.state()).roster.length, 0, 'No sale occurs during the long test clock');
+            Object.assign(round, { busyCleared: true, exactlyOnce: true, response, sends, browserErrors });
+            if (!conflicted) continue;
+            conflictedAmount = amount;
+            proof.nativeWebSocket = { roundsNeeded: index + 1, rounds,
+                attempts: results.map(attempt => ({ ...attempt, result: attempt.result.ok
+                ? { ok: true } : attempt.result })), browser: { response, sends, closes: wire.closes },
+                busyCleared: true, busyStates: wire.busyStates, feedback: wire.feedback, browserErrors,
+                noRawError: true, exactlyOnce: true, writerCommits: contention.count(), disconnects,
+                bidEvents: bidEvents.map((event: { id: number; managerId: number; data: { amount: number } }) =>
+                    ({ id: event.id, managerId: event.managerId, amount: event.data.amount })) };
+            break;
+        }
+        assert(conflictedAmount !== undefined, `A browser bid must hit a real OCC close within ${contentionRounds} rounds`);
+        console.log('PASS Native draft contention resends intended bids and clears browser busy state without double apply');
+        const httpRounds: Record<string, unknown>[] = [];
+        proof.httpRounds = httpRounds;
+        let httpConflicted = false;
+        for (let index = 0; index < contentionRounds; index++) {
+            const httpAmount = conflictedAmount + 40 + index;
+            const httpContention = await churn();
+            let requests = 0;
+            let aborts = 0;
+            const countedFetch: typeof fetch = async (input, init) => {
+                requests++;
+                const response = await fetch(input, init);
+                if (!response.ok) {
+                    const error = await response.clone().json();
+                    if (error.code === 'OptimisticConcurrencyControlFailure') {
+                        aborts++;
+                        await httpContention.stop();
+                    }
+                }
+                return response;
+            };
+            await bounded(new AuctionClient(backend.url, countedFetch)
+                .act({ type: 'bid', lotId, amount: httpAmount }, tokens[1]), 'HTTP bid retry');
+            await httpContention.stop();
+            assert.equal(requests, aborts + 1, 'The HTTP helper retries only the aborted attempt');
+            const afterHttp = await backend.admin('admin:inspect');
+            const httpBids = afterHttp.events.filter((event: { type: string; managerId: number; data: { amount: number } }) =>
+                event.type === 'bid' && event.managerId === 2 && event.data.amount === httpAmount);
+            assert.equal(httpBids.length, 1);
+            const round = { amount: httpAmount, requests, aborts, committedBids: httpBids.length,
+                eventId: httpBids[0].id, writerCommits: httpContention.count() };
+            httpRounds.push(round);
+            if (!aborts) continue;
+            assert.equal(aborts, 1, 'The real HTTP path must expose an aborted transaction');
+            assert.equal(requests, 2, 'The HTTP helper retries only the aborted attempt');
+            httpConflicted = true;
+            proof.httpRetry = { ...round, roundsNeeded: index + 1, rounds: httpRounds };
+            break;
+        }
+        assert(httpConflicted, `The real HTTP path must expose an aborted transaction within ${contentionRounds} rounds`);
         console.log('PASS Real HTTP bid conflict retries and commits once');
         const disconnectsBeforeRejection = disconnects.length;
         const rejected = await bidders[0].mutation(api.auction.actOnDraft,
@@ -221,6 +262,8 @@ async function main() {
     } catch (error) {
         proof.result = 'failed';
         proof.error = error instanceof Error ? error.message : String(error);
+        try { proof.failedBrowserTransport = await evaluate('window.transport'); }
+        catch (diagnosticError) { proof.transportDiagnosticError = String(diagnosticError); }
         throw error;
     } finally {
         try {
