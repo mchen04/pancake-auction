@@ -246,7 +246,8 @@ async function main() {
             names: { name: string; clientWidth: number; scrollWidth: number; gap: number;
                 cueVisible: boolean; buttonFits: boolean; aligned: boolean;
                 lines: { text: string; fits: boolean; width: number; scrollWidth: number }[] }[];
-            columns: { text: string; fits: boolean; excluded: string | null }[];
+            columns: { text: string; fits: boolean; excluded: string | null; font: string;
+                clientWidth: number; scrollWidth: number; textWidth: number }[];
             admin: boolean; turn: boolean; gutter: number; document: number[]; viewport: number[];
             scrollWidth: number; clientWidth: number; tracks: string;
         }>(`(() => {
@@ -263,7 +264,10 @@ async function main() {
             };
             const columns=[header,...document.querySelectorAll('.team-row')].flatMap(row=>
                 [...row.children].slice(1).map((child,index)=>({text:child.textContent,
-                    fits:child.scrollWidth<=child.clientWidth,excluded:excluded(child,index+1)})));
+                    fits:child.scrollWidth<=child.clientWidth,excluded:excluded(child,index+1),
+                    font:getComputedStyle(child).font,clientWidth:child.clientWidth,scrollWidth:child.scrollWidth,
+                    textWidth:(()=>{const range=document.createRange();range.selectNodeContents(child);
+                        return range.getBoundingClientRect().width;})()})));
             const names=[...document.querySelectorAll('.team-row')].map(row=>{
                 const cellElement=row.querySelector('.team-name');
                 const button=cellElement.querySelector('.team-inspect')??cellElement.querySelector('b');
@@ -367,14 +371,24 @@ async function main() {
                                 .closest('.team-row').textContent.includes('Nominating')`);
                             nomination = await teamNames();
                         }
+                        let fallback: Awaited<ReturnType<typeof teamNames>> | null = null;
+                        if (width <= 390) {
+                            const font = '"IBM Plex Sans Fallback",Arial';
+                            await evaluate(`document.documentElement.style.setProperty('--font-body',${JSON.stringify(font)});true`);
+                            try { fallback = await teamNames(); }
+                            finally {
+                                await evaluate(`document.documentElement.style.removeProperty('--font-body');true`);
+                            }
+                        }
                         const panels = await panelWidths(width, label);
-                        const proof = { normal, reserved, nomination, panels };
+                        const proof = { normal, reserved, nomination, fallback, panels };
                         await writeFile(`${evidence}/${label}-team-names.json`, JSON.stringify(proof,null,2));
                         await browser('scroll', 'up', '2000', '--selector', '.teams .scroll');
                         await browser('screenshot', `${evidence}/${label}-team-names.png`);
                         assert(reserved.gutter >= 15, 'The scrollbar control must reserve real browser space');
                         assertPanelWidths(panels);
-                        for (const layout of [normal, reserved, ...(nomination ? [nomination] : [])]) {
+                        for (const layout of [normal, reserved, ...(nomination ? [nomination] : []),
+                            ...(fallback ? [fallback] : [])]) {
                             assert.equal(layout.admin, commissioner && status !== 'running');
                             assert.equal(layout.turn, live);
                             assert(layout.scrollWidth <= layout.clientWidth,

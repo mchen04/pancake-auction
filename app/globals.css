@@ -1256,6 +1256,9 @@ input {
   .pool-grid > :nth-child(6) {
     display: none;
   }
+  .table-head.team-grid {
+    letter-spacing: 0;
+  }
   .team-grid {
     grid-template-columns: minmax(0, 1fr) 46px 46px 42px 32px 26px;
     column-gap: 5px;
