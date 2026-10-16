@@ -4,9 +4,13 @@ A single-page NBA dynasty startup auction for ten managers. Next.js renders the 
 
 ## Setup
 
-Use Node 24 or later. Install dependencies with `npm ci`. For this local phase, run `npm run backend:local` in one terminal. It starts Convex in anonymous mode, without a login, and isolates the CLI configuration under the ignored `.convex` directory. Keep that terminal running. The CLI writes local deployment state and the public frontend URL for Next.js. Restarts reuse the same local data. Ports default to 3210 and 3211; `CONVEX_LOCAL_CLOUD_PORT` and `CONVEX_LOCAL_SITE_PORT` can select different ports.
+Use Node 24 or later and install dependencies with `npm ci`. These steps initialize a new local league. Preserve the data and claimed seats of an existing league.
 
-Run `npm run league:managers`, then import the pool and run `npm run league:check`. `CONVEX_LOCAL_DIR` optionally selects a local deployment configuration directory. `CONVEX_URL` or `NEXT_PUBLIC_CONVEX_URL` selects the frontend's backend URL. `NEXT_DIST_DIR` optionally separates production builds. No cloud deployment or deploy key is required for verification.
+Run `npm run backend:local` in one terminal and keep it running. It starts an anonymous local Convex backend without a cloud login. Its private CLI home and persistent database live under the ignored `.convex` directory. The CLI writes the public frontend URL for Next.js. Restarts reuse the same local data. Backend ports default to 3210 and 3211. `CONVEX_LOCAL_CLOUD_PORT` and `CONVEX_LOCAL_SITE_PORT` select different ports when needed.
+
+In another terminal, load the managers, import the pool, and run the readiness check. Then run `npm run dev` and open `http://localhost:3000`. Keep the backend terminal running alongside Next.js. A local production preview uses `npm run build`, then `npm run start -- -p 3000`.
+
+`CONVEX_LOCAL_DIR` optionally selects the generated local deployment configuration directory for admin commands. `CONVEX_URL` or `NEXT_PUBLIC_CONVEX_URL` selects the frontend's backend URL. `NEXT_DIST_DIR` optionally separates build output. No cloud deployment or deploy key is required for local verification.
 
 ```sh
 npm run backend:local
@@ -29,21 +33,44 @@ Import, manager setup, and CLI recovery call internal functions through the Conv
 
 ## Local verification
 
-The mini helper limits a pinned backend archive download to 120 seconds, including headers and the full body. This allows roughly 0.5 MB/s for a 60 MB archive. `MINI_RUN_BACKEND_DOWNLOAD_MS` overrides the deadline, clamped to 250–300,000 ms for bounded tests and slower links. Failure removes the owned download state and releases the preparation lock. A valid cached binary requires no download.
+Verification is standalone after `npm ci`; it does not require the companion mini helper or a running development server. Install `agent-browser` and its Chromium browser before browser checks. The lifecycle tests also use `zip`, `unzip`, and standard Unix process tools. A cold backend cache downloads the pinned public Convex binary. Verification does not use a cloud login or fetch from Sleeper.
 
-Set `EVIDENCE_DIR` outside the repository. The containment check resolves physical paths, including symlinks and missing suffixes. Run `npm run verify`. The installed `agent-browser` CLI supplies separate headless Chromium browsers.
+Set `EVIDENCE_DIR` to an absolute path outside the repository, then run `npm run verify`. Physical containment checks include symlinks, missing suffixes, and final write targets. Each backend scenario and simulation uses an isolated anonymous local backend with its own ports, database, and private CLI home. Cleanup stops owned resources and removes their state. Failed or uncertain teardown preserves state and reports an error. A backend startup failure fails the test.
 
-Each test command and simulation creates a fresh anonymous local Convex backend with its own ports, data directory, and private CLI configuration. The harness removes that state and stops its processes afterward. No existing deployment, credentials, or database is used. Tests fail if the backend cannot start. Fixtures replace all Sleeper requests in importer tests.
+`verify` runs these twelve commands in order and stops at the first failure:
 
-Isolated backend setup has a 120-second total deadline after the existing 60-second lock wait. This covers bootstrap, readiness responses, function push, and the smoke query. `AUCTION_BACKEND_SETUP_TIMEOUT_MS` overrides it within 250–300,000 ms. Local cached starts normally take a few seconds; the default also allows the cold bootstrap download and retries. Timeout aborts setup requests, stops verified owned process groups with bounded escalation, checks listener closure, and releases the lock.
+| Step | Command |
+| --- | --- |
+| 1 | `npm run typecheck` |
+| 2 | `npm run lint` |
+| 3 | `npm run test` |
+| 4 | `npm run test:local` |
+| 5 | `npm run test:db` |
+| 6 | `npm run test:ui` |
+| 7 | `npm run test:volume` |
+| 8 | `npm run build` |
+| 9 | `npm run test:layout` |
+| 10 | `npm run test:room` |
+| 11 | `npm run sim -- --runs 3 --timing fast --seed 1042 --skip-build` |
+| 12 | `npm run sim -- --runs 1 --timing real --seed 2042 --skip-build` |
 
-Mini checks use `../tools/mini-run.sh <label> <command...>` from the app directory. Each invocation verifies a source manifest and uses its own remote source and dependency copy. The printed evidence path is `evidence/mini/<label>/<run-id>/artifacts/`. Use that path instead of label-only logs. The adjacent `retrieval.json` separates the remote execution exit from retrieval validation. Missing or mismatched evidence returns a non-zero exit. Successful retrieval removes that invocation's remote source; remote evidence and up to two lockfile-keyed dependency caches remain.
+Logs and exit codes go under `EVIDENCE_DIR/verify-<timestamp>/`. Results include browser screenshots, resource-closure records, per-draft summaries, event logs, and the seed spread. `test:local` covers backend startup, caches, locks, deadlines, restart, and cleanup. `test:db` covers real Convex transactions, scheduler guards, claims, auction races, and replay regressions. Browser suites cover the production room, connection, clock, opening bids, controls, and roster layout.
 
-Shutdown uses the CLI's graceful SIGINT path. Each close checks that both native listener ports are closed.
+Isolated setup has a 120-second total deadline after the existing 60-second preparation-lock wait. It covers bootstrap, readiness responses, function push, and the smoke query. `AUCTION_BACKEND_SETUP_TIMEOUT_MS` overrides it within 250–300,000 ms. Cached starts normally take a few seconds; the deadline also allows a cold bootstrap download and retries. Teardown uses verified process ownership, bounded signal escalation, and checks that both backend ports close.
 
-`verify` runs typecheck, lint, unit tests, backend integration tests, component and browser regressions, subscription-volume checks, a production build, layout and import-and-sale checks, three fast full drafts, and one real-timing full draft. It records each exit code and log path. Simulations import the stored public Sleeper pool fixture with its original fetchedAt; they never re-pull data. Stored import metadata and run reports preserve the fixture timestamp and source URLs. Ten independent Convex HTTP clients claim seats and call the public API concurrently. A separate process restores a saved token during each run.
+Simulations seed the recorded public Sleeper fixture, preserving its original `fetchedAt` and source URLs. They never re-pull data. Ten independent Convex HTTP clients claim seats and call the public API concurrently. A separate process restores a saved token during each run. Bots use seeded valuations, projections, dynasty ADP, manager bias, noise, and positional need. They raise concurrently, snipe, bid exact maximums, give up, or await expiry. Pause and resume carry the observed control generation.
 
-Bots draw valuations from the seed, projection, dynasty ADP, manager bias, noise, and positional need. They raise concurrently with mixed increments, snipe, bid maximums, give up, or await expiry. Fast clocks use 3/3/1.5/4.5 seconds; real clocks use 10/10/5/15. Every draft requires 400 accepted bids, 25 expiry sales, three nomination timeouts, five exact-maximum bids, an average unspent budget below $150, and 200 active players. The independent event replay retains all 18 invariants. Run summaries record the per-seed spread.
+Fast timings are 3/3/+1.5/4.5 seconds; real timings are 10/10/+5/15 seconds. Every draft requires at least 400 accepted bids, 25 expiry sales, three nomination timeouts, and five exact-maximum bids. Average unspent budget must stay below $150, and all 200 active spots must fill. Each draft also proves Taxi and IR wins after active rosters fill, and passes all 18 independent replay invariants.
+
+### Optional mini companion
+
+The companion `../tools/mini-run.sh <label> <command...>` runs checks on a separate Mac mini through existing SSH configuration. It is outside this repository and is optional. Default `verify` and `test:local` commands do not depend on it.
+
+Each helper invocation verifies a source manifest and uses a separate remote source and dependency copy. Evidence returns to `evidence/mini/<label>/<run-id>/artifacts/` beside the repository. Use the printed invocation path rather than label-only logs. The adjacent `retrieval.json` separates the command exit from retrieval validation. Missing or mismatched evidence fails. Cleanup removes the owned run workspace and retains evidence and bounded dependency caches.
+
+The helper's cold binary download has a 120-second total deadline for headers and body. This allows roughly 0.5 MB/s for a 60 MB archive. `MINI_RUN_BACKEND_DOWNLOAD_MS` overrides it within 250–300,000 ms. A valid cached binary needs no download.
+
+`npm run test:helper-download` is an optional regression for that external helper. It requires `../tools/mini-run.mjs`, or `MINI_RUN_HELPER_SOURCE` pointing to the companion module, plus an external `EVIDENCE_DIR`. It uses local HTTP fixtures, real zip/unzip, and a labelled fixture executable. It does not start a real Convex backend. Neither `verify` nor `test:local` invokes it.
 
 ## Auction rules
 
@@ -68,7 +95,7 @@ Taxi has three places. A rookie (`years_exp=0`) qualifies. A non-rookie qualifie
 
 A manager with a full active roster can still bid and nominate eligible Taxi or Out players. Their maximum is the full remaining budget. With active openings, a taxi/IR placement reserves $1 for every active opening. Taxi and IR can remain empty. Full groups, empty eligible pools, exhausted budgets, explicit Done choices, and a full cycle of timeout passes terminate without deadlock. Each nomination clears the passed-turn cycle. A roster move clears that manager’s earlier pass because their legal nominations can change. Taxi/IR-only teams keep their turns unless they choose Done or have no legal nomination. The event log records each passed turn and the completion reason.
 
-Pause stores the exact remaining milliseconds. Resume adds that amount to the Convex mutation clock. Undo targets the sale shown in its confirmation. A changed latest sale produces a 409 instead of undoing another sale. Undo removes the confirmed sale from its current placement and refunds the price. It returns the player, voids the open lot and all its bids through the lot status, restores the undone nominator, clears that manager's done flag, and pauses. Undo repeats through the sale stack. Bid and event records remain for audit. Automatic awards wait while paused. Resume evaluates expiry and all-out inside the serializable transaction. Force-end awards the current high bid immediately, including while paused.
+Pause stores the exact remaining milliseconds. Resume adds that amount to the Convex mutation clock. Undo targets the sale shown in its confirmation. A changed latest sale produces a 409 instead of undoing another sale. Undo removes the confirmed sale from its current placement and refunds the price. It returns the player, voids the open lot and all its bids through the lot status, restores the undone nominator, and pauses. It clears the nominator's Done flag and any Done flag made invalid by an active spot reopening. Undo repeats through the sale stack. Bid and event records remain for audit. Automatic awards wait while paused. Resume evaluates expiry and all-out inside the serializable transaction. Force-end awards the current high bid immediately, including while paused.
 
 ## Storage and clock
 
@@ -115,7 +142,13 @@ The league PDF restricts taxi to drafted first-year rookies and disallows undraf
 
 ## Draft room
 
-One full-screen page; only panels scroll. Wide screens show the player pool, the auction block with the shot-clock timer, the Teams table (budget, max bid, roster counts, turn order) with Sales and Activity, and My roster side by side. At 1180 px and below, Players, My roster and Results move into tabs beside the block and Teams; at 860 px and below everything stacks under the block with four tabs, and the Players tab opens when your nomination turn starts. Player rows show positions, team, age, career games, projection, dynasty ADP, injury and taxi tags; a tap opens the projected stat line and the taxi and IR reasons. Unknown values show "?" in table cells and are spelled out in the lot line and details. The winner moves a player with one click to any legal group from the roster row or the win banner. Undo, Force end and seat release ask for a second click.
+One full-screen page uses panel scrolling without document scrolling. Wide screens show Players, the auction block, Teams, Results, and My roster. At 1219 px and below, Players, My roster, and Results use tabs beside the auction block and Teams. At 860 px and below, all four tabs sit below the auction block. The Players tab opens when a new nomination turn starts.
+
+My roster shows 10 starter rows, 10 Bench rows, 3 Taxi rows, and 2 IR rows. Every empty spot shows a muted Open placeholder, including on mobile. An occupied player replaces a placeholder rather than adding a row. Group counts supplement the rows. If active matching is unavailable, the fallback still shows all 20 active spots.
+
+Activate a team-name button or its visible chevron to inspect that roster below the team row. Enter and Space work too. Only one team roster opens at a time; activating the same team closes it. Inspected rosters use the same occupied and empty slots, player details, and panel scrolling. They are read-only, including when inspecting your own team. My roster retains placement controls. Below 390 px, a commissioner's Release control sits inside the expanded team row.
+
+Player rows show positions, team, age, career games, projection, dynasty ADP, injury, and taxi tags. Player details show the projected stat line and eligibility reasons. Unknown values show "?" in table cells and explicit text in the lot line and details. A winner can move a player to any legal group from My roster or the win banner. Undo, Force end, and seat release require confirmation.
 
 ## Delivery boundaries
 
@@ -123,7 +156,8 @@ No deployment, push or PR is part of this stage. Use `league:check` before start
 
 ## Compact-screen regression checks
 
-`npm run test:layout` uses the stored real player pool, production fonts, and a separate headless Chromium browser.
+`npm run test:layout` uses the stored real player pool and a separate headless Chromium browser.
+The browser harness loads built production fonts when available; roster checks also exercise fallback fonts.
 It checks the desktop layout boundary and all four phone tabs with Giannis details open and closed.
 At 390×667 and 390×844, each selected tab keeps at least 100 pixels of scroll space.
 Player information scrolls inside the auction block while the normal bid controls remain visible.
