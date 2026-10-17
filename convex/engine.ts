@@ -19,9 +19,6 @@ export async function tokenHash(token: string) {
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
     return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 }
-export function randomToken() {
-    return Array.from(crypto.getRandomValues(new Uint8Array(32)), byte => byte.toString(16).padStart(2, '0')).join('');
-}
 function randomIndex(limit: number): number {
     const ceiling = Math.floor(4294967296 / limit) * limit;
     let value: number;
@@ -31,11 +28,17 @@ function randomIndex(limit: number): number {
 export async function draftRecord(ctx: QueryCtx) {
     return ctx.db.query('drafts').withIndex('key', q => q.eq('key', 'auction')).unique();
 }
+// Trusted league: anyone may select any manager, from any number of devices. A seat reference is the nonsecret
+// `seat:<managerId>`. A 64-hex device token from the earlier exclusive-claim model still resolves to its seat.
+export const seatReference = (managerId: number) => `seat:${managerId}`;
 async function identity(ctx: QueryCtx, token?: string) {
+    const seat = token ? /^seat:(\d{1,3})$/.exec(token) : null;
+    if (seat) return ctx.db.query('managers').withIndex('id', q => q.eq('id', Number(seat[1]))).unique();
     if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
     const hash = await tokenHash(token);
     return ctx.db.query('managers').withIndex('tokenHash', q => q.eq('tokenHash', hash)).unique();
 }
+const joined = (manager: Doc<'managers'>) => manager.tokenHash !== null || manager.joinedAt !== undefined;
 export function cleanLot(row: Doc<'lots'>): Lot {
     const resolved = ['sold', 'unsold', 'undone'].includes(row.status);
     return { id: row.id, playerId: row.playerId, nominatorId: row.nominatorId,
@@ -68,7 +71,7 @@ export async function load(ctx: QueryCtx, token?: string, includePool = true, fu
     if (lot) neededPlayers.set(lot.playerId, lot.player);
     return { poolRevision: latest?.revision ?? '0', draft,
         managers: managers.map(m => ({ id: m.id, name: m.name, commissioner: m.commissioner,
-            budget: m.budget, done: m.done, claimed: m.tokenHash !== null })), me: me?.id ?? null,
+            budget: m.budget, done: m.done, claimed: joined(m) })), me: me?.id ?? null,
         players: pool?.players ?? (includePool ? [...neededPlayers.values()] : []),
         roster: roster.map(r => ({ playerId: r.playerId, managerId: r.managerId,
             placement: r.placement, price: r.price, lotId: r.lotId })),
@@ -283,7 +286,7 @@ function requireSealed(s: AuctionState) {
 }
 function requireManager(s: AuctionState) {
     const manager = s.managers.find(m => m.id === s.me);
-    if (!manager) throw new RuleError('Claim your seat first', 401);
+    if (!manager) throw new RuleError('Choose your seat first', 401);
     return manager;
 }
 export async function changeQueue(ctx: MutationCtx, token: string, action: QueueAction) {
@@ -470,12 +473,13 @@ export async function claim(ctx: MutationCtx, managerId: number) {
     return transaction(ctx, undefined, async (store, s, now) => {
         const manager = s.managers.find(m => m.id === managerId);
         if (!manager) throw new RuleError('Choose a configured manager');
-        if (manager.claimed) throw new RuleError('This seat is claimed. Ask the commissioner to release it.', 409);
-        const token = randomToken();
-        const row = await ctx.db.query('managers').withIndex('id', q => q.eq('id', managerId)).unique();
-        await ctx.db.patch(row!._id, { tokenHash: await tokenHash(token) });
-        await event(store, 'claim', managerId, null, {}, now);
-        return token;
+        // Selecting is never exclusive. The first selection only marks the manager as joined.
+        if (!manager.claimed) {
+            const row = await ctx.db.query('managers').withIndex('id', q => q.eq('id', managerId)).unique();
+            await ctx.db.patch(row!._id, { joinedAt: now });
+            await event(store, 'claim', managerId, null, {}, now);
+        }
+        return seatReference(managerId);
     });
 }
 export async function restore(ctx: MutationCtx, token: string) {

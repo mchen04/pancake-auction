@@ -1,7 +1,7 @@
 import { expireDraft } from '../convex/auction';
 import { v } from 'convex/values';
 import { internalMutation, internalQuery } from '../convex/_generated/server';
-import { draftRecord, initialDraft, load, Store } from '../convex/engine';
+import { draftRecord, initialDraft, load, Store, tokenHash } from '../convex/engine';
 import type { Draft, Entry } from '../lib/types';
 
 export const queryFailure = internalMutation({ args: { enabled: v.boolean() }, handler: async (ctx, args) => {
@@ -85,6 +85,13 @@ export const scheduledDeadlines = internalQuery({ args: {}, handler: async ctx =
         .filter(job => job.state.kind === 'pending')
         .map(job => ({ name: job.name, args: job.args, scheduledTime: job.scheduledTime }));
 } });
+// A device token from the earlier exclusive-claim model, stored as only its SHA-256 hash like production did.
+export const legacyToken = internalMutation({ args: { managerId: v.number() }, handler: async (ctx, args) => {
+    const token = Array.from(crypto.getRandomValues(new Uint8Array(32)), byte => byte.toString(16).padStart(2, '0')).join('');
+    const row = await ctx.db.query('managers').withIndex('id', q => q.eq('id', args.managerId)).unique();
+    await ctx.db.patch(row!._id, { tokenHash: await tokenHash(token) });
+    return token;
+} });
 export const legacy = internalMutation({ args: {
     status: v.union(v.literal('setup'), v.literal('running'), v.literal('paused'), v.literal('complete')),
     data: v.optional(v.union(v.literal('lot'), v.literal('roster'))), unclaimed: v.optional(v.boolean())
@@ -96,7 +103,7 @@ export const legacy = internalMutation({ args: {
         passedTurns: [], completionReason: null };
     const player = (await ctx.db.query('pools').unique())!.players[0];
     if (args.unclaimed) for (const manager of await ctx.db.query('managers').collect())
-        await ctx.db.patch(manager._id, { tokenHash: null });
+        await ctx.db.patch(manager._id, { tokenHash: null, joinedAt: undefined });
     if (args.status !== 'setup') {
         value.status = args.status;
         value.order = [1,2,3,4,5,6,7,8,9,10];

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<!-- Pancake Auction app icon: basketball on a syrup pancake stack. Source for public/*.png and favicon.ico. -->
+<defs>
+ <radialGradient id="bg" cx="50%" cy="38%" r="75%"><stop offset="0" stop-color="#23314d"/><stop offset=".6" stop-color="#111a2d"/><stop offset="1" stop-color="#080d18"/></radialGradient>
+ <radialGradient id="glow" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#ffb21e" stop-opacity=".34"/><stop offset="1" stop-color="#ffb21e" stop-opacity="0"/></radialGradient>
+ <linearGradient id="cake" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f9cf86"/><stop offset=".5" stop-color="#e9a24b"/><stop offset="1" stop-color="#b9681f"/></linearGradient>
+ <linearGradient id="syrup" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffc23d"/><stop offset="1" stop-color="#f08a12"/></linearGradient>
+ <radialGradient id="ball" cx="36%" cy="30%" r="80%"><stop offset="0" stop-color="#ff9b45"/><stop offset=".55" stop-color="#ee641a"/><stop offset="1" stop-color="#a93f0a"/></radialGradient>
+ <clipPath id="b"><circle cx="256" cy="180" r="96"/></clipPath>
+</defs>
+<rect width="512" height="512" fill="url(#bg)"/>
+<g transform="translate(256 252) scale(1.08) translate(-256 -252)">
+<circle cx="256" cy="200" r="190" fill="url(#glow)"/>
+<circle cx="256" cy="180" r="124" fill="none" stroke="#ffb21e" stroke-width="7"/>
+<ellipse cx="256" cy="436" rx="176" ry="20" fill="#000" opacity=".45"/>
+<g stroke="#3f1d05" stroke-width="6">
+ <rect x="86" y="368" width="340" height="60" rx="30" fill="url(#cake)"/>
+ <rect x="100" y="316" width="312" height="60" rx="30" fill="url(#cake)"/>
+ <rect x="90" y="264" width="332" height="60" rx="30" fill="url(#cake)"/>
+</g>
+<path d="M126 268 H386 Q404 268 404 284 Q404 296 396 300 V330 a12 12 0 0 1 -24 0 V306 H322 V352 a13 13 0 0 1 -26 0 V306 H206 V340 a12 12 0 0 1 -24 0 V306 H130 Q108 304 108 286 Q108 268 126 268 Z" fill="url(#syrup)" stroke="#3f1d05" stroke-width="5" stroke-linejoin="round"/>
+<circle cx="256" cy="180" r="96" fill="url(#ball)" stroke="#241003" stroke-width="7"/>
+<g clip-path="url(#b)" fill="none" stroke="#241003" stroke-width="8" stroke-linecap="round">
+ <path d="M150 180 H362"/>
+ <path d="M256 74 V286"/>
+ <path d="M197 98 C233 136 233 224 197 262"/>
+ <path d="M315 98 C279 136 279 224 315 262"/>
+</g>
+<ellipse cx="220" cy="134" rx="28" ry="16" fill="#fff" opacity=".2" transform="rotate(-32 220 134)"/>
+</g>
+</svg>

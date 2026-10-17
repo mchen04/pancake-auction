@@ -16,6 +16,7 @@
     "verify": "tsx scripts/verify.ts",
     "league:check": "tsx scripts/cli.ts check",
     "test:ui": "tsx tests/sealed-ui.ts",
+    "test:seats": "tsx tests/trusted-seats.ts",
     "test:volume": "tsx tests/pool-volume.ts",
     "backend:local": "tsx scripts/local-dev.ts",
     "test:local": "tsx tests/ownership-gap.ts && tsx tests/backend-deadline.ts && tsx tests/process-groups.ts && node tests/bootstrap-cache.mjs && node tests/bootstrap-concurrency.mjs && node tests/bootstrap-config.mjs && tsx tests/preparation-lock.ts && tsx tests/backend-network.ts && tsx tests/local-dev.ts && tsx tests/local-state.ts && tsx tests/setup-cleanup.ts",

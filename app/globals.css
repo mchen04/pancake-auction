@@ -261,7 +261,9 @@ input {
   color: var(--court);
 }
 .table-head .sorted::after {
-  content: " ↓";
+  content: "↓";
+  margin-left: 2px;
+  letter-spacing: 0;
 }
 .empty-note {
   padding: 14px 12px;
@@ -298,15 +300,19 @@ input {
   padding: 9px 10px;
   border-bottom: 1px solid var(--line);
 }
+/* Player table: columns are sized for their widest header or value plus a 12px gutter. */
+.pool {
+  container-type: inline-size;
+}
 .pool-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 62px 30px 40px 40px 36px;
+  grid-template-columns: minmax(0, 1fr) 56px 36px 40px 44px 42px;
   align-items: center;
-  column-gap: 6px;
-  padding: 0 10px;
+  column-gap: 12px;
+  padding: 0 12px;
 }
 .with-action .pool-grid {
-  grid-template-columns: minmax(0, 1fr) 62px 30px 40px 40px 36px 74px;
+  grid-template-columns: minmax(0, 1fr) 56px 36px 40px 44px 42px 72px;
 }
 .blocked {
   display: block;
@@ -356,10 +362,15 @@ input {
 }
 .pool-row .name {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 5px;
+  gap: 2px 5px;
   min-width: 0;
+  padding: 5px 0;
   white-space: nowrap;
+}
+.pool-row .name .name-button {
+  white-space: normal;
 }
 .name-button {
   border: 0;
@@ -376,6 +387,36 @@ input {
 }
 .pool-row > span:last-child {
   text-align: right;
+}
+/* Narrow player panels (phones, tablets, smaller desktops): the name gets its own line and every stat,
+   including ADP, shares an evenly spaced line beneath it. The action spans both lines on the right. */
+@container (max-width: 539px) {
+  .pool-grid {
+    grid-template-columns: minmax(0, 1.3fr) repeat(4, minmax(0, 1fr));
+    column-gap: 10px;
+  }
+  .with-action .pool-grid {
+    grid-template-columns: minmax(0, 1.3fr) repeat(4, minmax(0, 1fr)) 64px;
+  }
+  .table-head.pool-grid > :first-child {
+    display: none;
+  }
+  .pool-row.pool-grid {
+    row-gap: 1px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+  .pool-row > .name {
+    grid-column: 1 / -1;
+    padding: 0;
+  }
+  .with-action .pool-row > .name {
+    grid-column: 1 / -2;
+  }
+  .with-action .pool-row > :nth-child(7) {
+    grid-column: -2;
+    grid-row: 1 / span 2;
+  }
 }
 .more {
   display: block;
@@ -544,7 +585,7 @@ input {
   display: grid;
   gap: 6px;
 }
-.position-select, .turn-inline {
+.position-select {
   display: none;
 }
 .bid-note {
@@ -580,28 +621,11 @@ input {
   column-gap: 5px;
   padding: 0 10px;
 }
-.team-grid.with-admin {
-  grid-template-columns: minmax(0, 1fr) 48px 46px 44px 34px 28px 58px;
-}
 .team-grid.with-turn {
   grid-template-columns: minmax(0, 1fr) 48px 46px 44px 34px 28px 34px;
 }
-.team-grid.with-turn.with-admin {
-  grid-template-columns: minmax(0, 1fr) 48px 46px 44px 34px 28px 34px 58px;
-}
-.team-grid.with-admin .team-name {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0;
-}
 .team-grid.with-turn .status.turn {
   display: none;
-}
-.release {
-  width: 100%;
-  min-height: 26px;
-  padding: 2px 0;
-  font-size: 11px;
 }
 .ghost.armed, .ghost.armed:hover:not(:disabled) {
   background: var(--red);
@@ -643,7 +667,7 @@ input {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.team-name .status, .team-name .turn-inline {
+.team-name .status {
   max-width: 100%;
   white-space: normal;
   overflow: visible;
@@ -884,18 +908,6 @@ input {
   }
 }
 
-@media (max-width: 1399px) {
-  .pool-row .name {
-    flex-wrap: wrap;
-    row-gap: 2px;
-    padding: 5px 0;
-  }
-  .pool-row .name .name-button {
-    flex-basis: 100%;
-    white-space: normal;
-  }
-}
-
 @media (max-width: 1219px) {
   .narrow-only {
     display: revert;
@@ -1064,18 +1076,8 @@ input {
   .high-bid strong {
     font-size: 30px;
   }
-  .pool-grid {
-    grid-template-columns: minmax(0, 1fr) 46px 28px 38px 38px;
-  }
-  .with-action .pool-grid {
-    grid-template-columns: minmax(0, 1fr) 50px 24px 34px 34px 64px;
-    column-gap: 4px;
-  }
   .nominate, .queue-quick {
     font-size: 11px;
-  }
-  .pool-grid > :nth-child(6) {
-    display: none;
   }
   .table-head.team-grid {
     letter-spacing: 0;
@@ -1086,22 +1088,6 @@ input {
   }
   .team-grid.with-turn {
     grid-template-columns: minmax(0, 1fr) 46px 46px 42px 32px 26px 34px;
-  }
-  .team-grid.with-admin {
-    grid-template-columns: minmax(0, 1fr) 42px 42px 42px 30px 26px 56px;
-    column-gap: 4px;
-  }
-  .team-grid.with-turn.with-admin {
-    grid-template-columns: minmax(0, 1fr) 42px 42px 42px 30px 26px 0 56px;
-  }
-  .team-grid.with-turn.with-admin > :nth-child(7) {
-    visibility: hidden;
-  }
-  .team-grid.with-turn.with-admin .turn-inline {
-    display: inline;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--muted);
   }
   .pool-filters {
     grid-template-columns: minmax(0, 1fr) 92px;
@@ -1118,9 +1104,6 @@ input {
     font: inherit;
     padding: 0 8px;
   }
-  .team-row.with-admin {
-    min-height: 44px;
-  }
   .seat-grid {
     grid-template-columns: repeat(2, 1fr);
     width: 100%;
@@ -1129,31 +1112,12 @@ input {
 }
 
 @media (max-width: 389px) {
-  .team-grid, .team-grid.with-admin {
+  .team-grid {
     grid-template-columns: minmax(0, 1fr) 40px 40px 42px 28px 24px;
     column-gap: 4px;
   }
   .team-grid.with-turn {
     grid-template-columns: minmax(0, 1fr) 40px 40px 42px 28px 24px 34px;
-  }
-  .team-grid.with-turn.with-admin {
-    grid-template-columns: minmax(0, 1fr) 40px 40px 42px 28px 24px;
-  }
-  .team-grid.with-turn.with-admin > :nth-child(7) {
-    display: none;
-  }
-  .team-release-heading, .team-release {
-    display: none;
-  }
-  .team-row.inspected > .team-release:has(button) {
-    display: block;
-    grid-column: 1 / -1;
-    justify-self: start;
-    padding-bottom: 6px;
-  }
-  .team-release .release {
-    width: auto;
-    padding: 0 10px;
   }
 }
 
@@ -1195,11 +1159,30 @@ input {
 }
 .me-box {
   flex: 0 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-end;
   margin-left: auto;
   min-width: 0;
   max-width: 220px;
+  padding: 2px 4px;
+  border: 0;
+  background: none;
+  font-weight: 400;
   text-align: right;
   line-height: 1.25;
+}
+.me-box:hover .me-switch {
+  color: var(--court);
+}
+.me-box .me {
+  display: block;
+  max-width: 100%;
+}
+.me-switch {
+  margin-left: 4px;
+  color: var(--muted);
 }
 .commish + .me-box {
   margin-left: 6px;
@@ -1576,6 +1559,10 @@ html.emulated-standalone .room { height: 100dvh; }
   .me-box {
     max-width: 46%;
   }
+  /* The 44px switch-manager target reaches into the 6px row gap / bottom padding instead of making the bar taller. */
+  .room .me-box {
+    margin-bottom: -6px;
+  }
   .deadline {
     font-size: 12px;
     min-width: 88px;
@@ -1676,6 +1663,7 @@ html.emulated-standalone .room { height: 100dvh; }
   .room .name-button {
     min-height: 0;
   }
+
   .pool-row {
     min-height: 44px;
   }

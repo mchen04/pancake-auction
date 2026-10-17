@@ -56,7 +56,7 @@ export const release = internalMutation({ args: { name: v.string() }, handler: a
 export const inspect = internalQuery({ args: {}, handler: async ctx => ({
     draft: await draftRecord(ctx), managers: (await ctx.db.query('managers').collect()).map(manager => ({
         id: manager.id, name: manager.name, commissioner: manager.commissioner, budget: manager.budget,
-        done: manager.done, claimed: manager.tokenHash !== null })),
+        done: manager.done, claimed: manager.tokenHash !== null || manager.joinedAt !== undefined })),
     roster: await ctx.db.query('roster').collect(), lots: await ctx.db.query('lots').collect(),
     events: await ctx.db.query('events').withIndex('id').collect(), imports: await ctx.db.query('imports').collect(),
     pool: await ctx.db.query('pools').unique().then(pool => pool

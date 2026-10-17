@@ -58,8 +58,12 @@ export default function Room() {
       if (saved) {
         try {
           const result = await restore({ token: saved });
-          if (result.ok && !cancelled) setToken(saved);
-          else if (!result.ok && result.status === 401) localStorage.removeItem('pancake-seat');
+          if (result.ok && !cancelled) {
+            // Older builds saved an exclusive device token; keep only the nonsecret seat reference from now on.
+            const seat = `seat:${result.value}`;
+            localStorage.setItem('pancake-seat', seat);
+            setToken(seat);
+          } else if (!result.ok && result.status === 401) localStorage.removeItem('pancake-seat');
         } catch {
           if (!cancelled) setToken(saved);
         }
@@ -126,14 +130,15 @@ export default function Room() {
         <h2>Who are you?</h2>
         <div className="seat-grid">
           {state.managers.map(manager => (
-            <button key={manager.id} disabled={manager.claimed || busy}
+            <button key={manager.id} disabled={busy}
               onClick={() => void send({ managerId: manager.id }, 'claim')}>
               <strong>{manager.name}</strong>
-              <small>{manager.claimed ? 'Taken' : manager.commissioner ? 'Commissioner' : ' '}</small>
+              <small>{manager.commissioner ? 'Commissioner' : manager.claimed ? 'Joined' : ' '}</small>
             </button>
           ))}
         </div>
-        <p>This browser remembers your seat. If yours shows Taken, ask Michael.</p>
+        <p>Tap your own name. This league runs on trust: there’s no password, and you can open your team on any
+          phone or computer. This device remembers your pick; tap your name in the room to switch.</p>
         {error && <p className="gate-error" role="alert">{error}</p>}
       </main>
     );
@@ -159,6 +164,12 @@ export default function Room() {
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Queue update failed'); }
     finally { setBusy(false); pending.current = false; }
   };
+  const switchManager = () => {
+    localStorage.removeItem('pancake-seat');
+    setToken(undefined);
+    setTab('players');
+    setOpening(undefined);
+  };
   const props = { state, me, busy, connected, send, privateSeat, editQueue };
   const mine = counts(state.roster.filter(entry => entry.managerId === me.id));
   const queued = privateSeat?.queue.length ?? 0;
@@ -169,10 +180,13 @@ export default function Room() {
         <p className={`headline ${state.draft.status}`}>{headline(state, me, privateSeat)}</p>
         {!connected && <p className="offline" id="room-connection-status" role="status">Reconnecting…</p>}
         {me.commissioner && <CommissionerBar {...props} pendingControl={pendingControl} />}
-        <div className="me-box">
-          <p className="me" title={me.name}>{me.name}</p>
-          <p className="me-budget">{dollars(me.budget)} left · {mine.active}/20</p>
-        </div>
+        <button className="me-box" title="Switch manager" onClick={switchManager}>
+          <span className="me">{me.name}<svg className="me-switch" width="9" height="10" viewBox="0 0 9 10"
+            aria-hidden="true" focusable="false"><path d="M1 3.5h6.5L5.5 1.5M8 6.5H1.5l2 2" fill="none"
+            stroke="currentColor" strokeWidth="1.3" /></svg></span>
+          <span className="me-budget">{dollars(me.budget)} left · {mine.active}/20</span>
+          <span className="sr-only">. Switch manager</span>
+        </button>
       </header>
       {error && <div className="toast" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss">×</button></div>}
       <BlockPanel {...props} opening={opening} setOpening={setOpening} />

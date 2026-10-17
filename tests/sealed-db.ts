@@ -63,7 +63,10 @@ async function main() {
             assert.equal(inspected.imports[0].fetchedAt, source.importMetadata.fetchedAt);
             assert.deepEqual(inspected.imports[0].sources, source.importMetadata.sources);
             assert((await checkLeague(() => backend.admin('admin:inspect'))).ready);
-            await deny(client.claim(1), /claimed/);
+            assert.equal(await clients[5].claim(1), tokens[0], 'Selecting a taken name again returns the same nonsecret seat');
+            assert(tokens.every((token, index) => token === `seat:${index + 1}`));
+            assert((await state()).managers.every(m => m.claimed), 'Selection marks every manager joined');
+            await deny(client.act({ type: 'start' }, 'seat:11'), /seat/i);
             await deny(client.act({ type: 'start' }, tokens[1]), /Commissioner/);
             await deny(client.act({ type: 'start' }, 'invalid'), /seat/i);
             assert.equal(await client.restore(tokens[2]), 3);
@@ -577,17 +580,34 @@ async function main() {
             assert.equal(audit.events.filter((e: { type: string }) => e.type === 'resolution').length, 200);
             evidence.fullDraft = { sales: won, active: s.roster.length, managers: s.managers, completionReason: s.draft.completionReason };
         });
-        await check('Release revokes old tokens without revealing or resetting private queue and response', async () => {
-            await reset(); await start();
-            await nominate();
-            await client.act({ type: 'bid', lotId: (await state()).lot!.id, amount: 29 }, tokens[1]);
+        await check('Trusted seats: devices share one seat, an old device token still works, responses stay private and final', async () => {
+            await reset();
+            const legacy = await backend.admin('testOnly:legacyToken', { managerId: 2 });
+            assert.equal(await client.restore(legacy), 2, 'A token saved by the earlier exclusive-claim build still opens its seat');
+            const phone = tokens[1], laptop = await clients[7].claim(2);
+            assert.equal(laptop, phone, 'A second device selecting Matthew gets the same seat without a release');
+            await clients[7].queue({ type: 'add', playerId: timeoutNominee(await state(), (await state()).managers[1])!.id }, laptop);
+            assert.deepEqual((await client.privateSeat(phone))?.queue, (await client.privateSeat(legacy))?.queue);
+            assert.equal((await client.privateSeat(phone))?.queue.length, 1);
+            await start();
+            const lot = (await state()).lot ?? await nominate();  // Matthew's queue nominates if he opens the draft
+            await client.act({ type: 'bid', lotId: lot.id, amount: 29 }, legacy);
+            for (const device of [phone, laptop, legacy]) {
+                assert.equal((await client.privateSeat(device))?.response?.amount, 29, 'Every device on the seat sees its own response');
+                await deny(client.act({ type: 'pass', lotId: lot.id }, device), /final/);
+                await deny(client.act({ type: 'bid', lotId: lot.id, amount: 30 }, device), /final/);
+            }
+            const other = await clients[3].claim(3);
+            assert.equal((await client.privateSeat(other))?.response, null, 'Another seat never sees this response');
+            for (const view of [await client.state(), await client.state(other), await client.state(phone)]) {
+                assert.equal(view.lot!.highBid, 0); assert.equal(view.lot!.bids, undefined);
+                assert(!JSON.stringify(view).includes('"amount":29'), 'Public state must not carry hidden amounts');
+            }
             await client.act({ type: 'release', managerId: 2 }, tokens[0]);
-            assert.equal(await client.privateSeat(tokens[1]), null);
-            await deny(client.restore(tokens[1]), /valid/);
-            await deny(client.act({ type: 'pass', lotId: (await state()).lot!.id }, tokens[1]), /seat/i);
-            const replacement = await client.claim(2);
-            assert.equal((await client.privateSeat(replacement))?.response?.amount, 29);
-            await deny(client.act({ type: 'pass', lotId: (await state()).lot!.id }, replacement), /final/);
+            await deny(client.restore(legacy), /valid/);
+            assert.equal(await client.restore(phone), 2, 'Release only forgets the old device token; selection still works');
+            assert.equal((await client.privateSeat(laptop))?.response?.amount, 29);
+            assert.equal((await state()).managers[1].claimed, true);
         });
     } finally {
         await writeEvidenceFile(`${root}/evidence.json`, JSON.stringify(evidence, null, 2));

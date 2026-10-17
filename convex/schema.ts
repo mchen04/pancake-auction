@@ -16,7 +16,7 @@ export default defineSchema({
         nextEvent: v.number(), nominationSequence: v.optional(v.number()), turnSequence: v.optional(v.number()),
         controlSequence: v.optional(v.number()) }).index('key', ['key']),
     managers: defineTable({ id: v.number(), name: v.string(), commissioner: v.boolean(), budget: v.number(),
-        done: v.boolean(), tokenHash: v.union(v.string(), v.null()) }).index('id', ['id']).index('tokenHash', ['tokenHash']),
+        done: v.boolean(), tokenHash: v.union(v.string(), v.null()), joinedAt: v.optional(v.number()) }).index('id', ['id']).index('tokenHash', ['tokenHash']),
     pools: defineTable({ revision: v.string(), players: v.array(player) }).index('revision', ['revision']),
     imports: defineTable({ revision: v.string(), startedAt: v.number(), finishedAt: v.number(),
         fetchedAt: v.string(), sources: v.array(v.string()), counts: v.any(), coverage: v.any() }),

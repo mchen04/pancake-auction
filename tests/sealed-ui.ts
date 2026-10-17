@@ -370,6 +370,12 @@ async function main() {
         await check('One page at phone, landscape, short and desktop sizes keeps identity, deadline, response state and actions reachable', async () => {
             const longest = [...source.players].sort((a, b) => b.name.length - a.name.length)[0];
             for (const player of [ranked[30], longest]) await client.queue({ type: 'add', playerId: player.id }, tokens[0]);
+            // Earlier checks leave a one-player search; measure the full pool so the player table shows realistic rows.
+            await tab('Players');
+            await browser!.evaluate(`(() => { const input = document.querySelector('[aria-label="Search players or team"]');
+                Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '');
+                return input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+            await until('document.querySelectorAll(".pool-row").length > 20');
             const sizes: ['phone' | 'desktop', number, number][] = [['phone', 390, 844], ['phone', 375, 667], ['phone', 360, 640],
                 ['phone', 320, 568], ['phone', 390, 500], ['phone', 844, 390], ['desktop', 1440, 900], ['desktop', 1280, 720],
                 ['desktop', 1220, 760], ['desktop', 1024, 700], ['desktop', 900, 600]];
@@ -410,9 +416,36 @@ async function main() {
                 const panel = [...document.querySelectorAll('.pool, .queue, .teams, .roster, .results')].filter(visible)
                     .map(e => ({ panel: e.className.replace('panel ', ''), height: Math.round(e.getBoundingClientRect().height),
                         scroll: e.querySelector('.scroll') ? Math.round(e.querySelector('.scroll').clientHeight) : null }));
+                // Player table: text (or action button) extents of every cell on screen; cells sharing a line must not crowd.
+                const pool = document.querySelector('.pool');
+                const extent = cell => { const control = cell.querySelector('.queue-quick, .nominate');
+                    if (control) return control.getBoundingClientRect();
+                    const range = document.createRange(); range.selectNodeContents(cell);
+                    const rects = [...range.getClientRects()].filter(r => r.width > 0 && r.height > 0);
+                    return rects.length ? { left: Math.min(...rects.map(r => r.left)), right: Math.max(...rects.map(r => r.right)),
+                        top: Math.min(...rects.map(r => r.top)), bottom: Math.max(...rects.map(r => r.bottom)) } : null; };
+                const line = row => { const cells = [...row.children].filter(c => visible(c) && !c.classList.contains('sr-only'))
+                    .map(c => ({ text: c.textContent.trim().slice(0, 24), ink: extent(c) })).filter(c => c.ink);
+                    let gap = Infinity, pair = null;
+                    for (let i = 0; i < cells.length; i++) for (let j = i + 1; j < cells.length; j++) {
+                        const a = cells[i].ink, b = cells[j].ink;
+                        if (Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) <= 0) continue;
+                        const d = Math.max(b.left - a.right, a.left - b.right);
+                        if (d < gap) { gap = d; pair = [cells[i].text, cells[j].text]; }
+                    }
+                    return { gap: Math.round(gap * 10) / 10, pair, labels: cells.map(c => c.text) }; };
+                let table = null;
+                if (pool && visible(pool)) {
+                    const scroll = pool.querySelector('.scroll'), s = scroll.getBoundingClientRect();
+                    const rows = [...pool.querySelectorAll('.pool-row')].filter(r => { const b = r.getBoundingClientRect();
+                        return visible(r) && b.top >= s.top - 1 && b.bottom <= s.bottom + 1; }).map(line);
+                    table = { head: line(pool.querySelector('.table-head')), rows: rows.length,
+                        rowGap: Math.min(...rows.map(r => r.gap)), crowded: rows.filter(r => r.gap < 8),
+                        overflowX: scroll.scrollWidth - scroll.clientWidth };
+                }
                 return { viewport: [vw, vh], document: [de.scrollWidth, de.scrollHeight], body: [document.body.scrollWidth, document.body.scrollHeight],
                     bodyOverflow: getComputedStyle(document.body).overflow, tab: document.querySelector('.room').dataset.tab,
-                    tabsShown: getComputedStyle(document.querySelector('.tabbar')).display !== 'none', required, targets, panel };
+                    tabsShown: getComputedStyle(document.querySelector('.tabbar')).display !== 'none', required, targets, panel, table };
             })()`;
             const proofs: unknown[] = [];
             function assertOnePage(proof: { viewport: number[]; document: number[]; body: number[]; bodyOverflow: string;
@@ -426,6 +459,17 @@ async function main() {
                 for (const panel of proof.panel) assert(panel.scroll === null || panel.scroll >= 56, `${label}: ${panel.panel} scroll area ${panel.scroll}px`);
                 if (touch) for (const target of proof.targets) assert(target.h >= 44, `${label}: touch target ${target.text} is ${target.h}px`);
             }
+            const tables = new Set<string>();
+            function assertTable(table: { head: { gap: number; labels: string[] }; rows: number; rowGap: number;
+                crowded: unknown[]; overflowX: number } | null, label: string, size: string) {
+                if (!table) return;
+                for (const stat of ['Pos', 'Age', 'GP', 'Proj', 'ADP']) assert(table.head.labels.some(text => text.startsWith(stat)),
+                    `${label}: player table hides ${stat} (${table.head.labels})`);
+                assert(table.rows >= 1, `${label}: no player row fully on screen`);
+                assert(table.head.gap >= 8 && table.rowGap >= 8, `${label}: player columns crowd: header ${table.head.gap}px, rows ${table.rowGap}px ${JSON.stringify(table.crowded)}`);
+                assert(table.overflowX <= 1, `${label}: player table overflows its panel by ${table.overflowX}px`);
+                if (table.rows >= 2) tables.add(size);
+            }
             for (const state of states) {
                 await state.setup();
                 for (const [form, width, height] of sizes) {
@@ -435,18 +479,20 @@ async function main() {
                     await sleep(150);
                     const label = `${state.name} ${width}x${height}`;
                     const touch = form === 'phone' || width < 1220;
-                    const proof = await browser!.evaluate<Parameters<typeof assertOnePage>[0] & { tabsShown: boolean }>(geometry([...common, ...state.required]));
+                    const proof = await browser!.evaluate<Parameters<typeof assertOnePage>[0] & { tabsShown: boolean; table: Parameters<typeof assertTable>[0] }>(geometry([...common, ...state.required]));
                     proofs.push({ state: state.name, form, size: [width, height], ...proof });
                     await screenshot(`onepage-${state.name}-${width}x${height}`);
                     assertOnePage(proof, label, touch);
+                    assertTable(proof.table, label, `${width}x${height}`);
                     if (proof.tabsShown && state.name === 'bidding') {
                         for (const name of ['Queue', 'Teams', 'My roster', 'Results', 'Players']) {
                             await tab(name);
                             await sleep(100);
-                            const tabProof = await browser!.evaluate<Parameters<typeof assertOnePage>[0]>(geometry([...common, ...state.required]));
+                            const tabProof = await browser!.evaluate<Parameters<typeof assertOnePage>[0] & { table: Parameters<typeof assertTable>[0] }>(geometry([...common, ...state.required]));
                             proofs.push({ state: state.name, form, size: [width, height], tab: name, ...tabProof });
                             if (name !== 'Players') await screenshot(`onepage-${state.name}-${width}x${height}-${name.replace(' ', '-').toLowerCase()}`);
                             assertOnePage(tabProof, `${label} ${name}`, touch);
+                            assertTable(tabProof.table, `${label} ${name}`, `${width}x${height}`);
                         }
                     }
                     if (form === 'phone' && height > width && state.name !== 'responded') {
@@ -463,6 +509,8 @@ async function main() {
                 }
                 if (browser!.form) await browser!.form('phone');
             }
+            for (const size of ['390x844', '375x667', '1440x900', '1280x720', '1024x700'])
+                assert(tables.has(size), `Player columns were not measured over two or more rows at ${size}`);
             evidence.onePage = proofs;
             await writeEvidenceFile(`${root}/one-page.json`, JSON.stringify(proofs, null, 2));
         });

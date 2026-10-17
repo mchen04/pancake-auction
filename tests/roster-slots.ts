@@ -166,7 +166,7 @@ async function main() {
     await seedManagers(); await seedPlayers(players);
     const tokens = await Promise.all(Array.from({ length: 10 }, (_, index) => claimSeat(index + 1)));
     const token = tokens[0];
-    let memberToken = tokens[1];
+    const memberToken = tokens[1];
     let viewerToken = token;
     await bundleEvidence(build, { entryPoints: ['tests/layout-harness.tsx'], outfile: `${evidence}/bundle.js`, bundle: true,
         platform: 'browser', format: 'esm', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' } });
@@ -390,7 +390,7 @@ async function main() {
                         assertPanelWidths(panels);
                         for (const layout of [normal, reserved, ...(nomination ? [nomination] : []),
                             ...(fallback ? [fallback] : [])]) {
-                            assert.equal(layout.admin, commissioner && status !== 'running');
+                            assert.equal(layout.admin, false, 'Trusted seats have no commissioner Release column');
                             assert.equal(layout.turn, live);
                             assert(layout.scrollWidth <= layout.clientWidth,
                                 `Teams must not scroll horizontally: ${layout.scrollWidth} > ${layout.clientWidth}`);
@@ -407,8 +407,7 @@ async function main() {
                             }
                             const hiddenTurns = layout.columns.filter(column =>
                                 column.excluded === 'inline-turn-column');
-                            assert.equal(hiddenTurns.length,
-                                live && commissioner && status !== 'running' && width <= 860 ? 11 : 0);
+                            assert.equal(hiddenTurns.length, 0);
                         }
                         return proof;
                     });
@@ -430,47 +429,28 @@ async function main() {
                 scroll.scrollTop+=r.top-s.top-(scroll.clientHeight-r.height)/2;return true;})()`);
             await browser('screenshot', `${evidence}/360x640-nominator.png`);
             const nominator = proof.names.find(manager => manager.name === 'Kyle')!;
-            assert(nominator.lines.some(line => line.text.trim() === 'Nominating'));
-            assert(nominator.lines.every(line => line.fits), 'Kyle: Nominating must fit');
+            assert(await evaluate(`document.querySelector('.team-row:has([aria-controls="team-roster-5"]) .turn-col')
+                ?.textContent.trim() === 'Now'`), 'Kyle shows Now in the Turn column');
+            assert(nominator.lines.every(line => line.fits), 'Kyle: status lines must fit');
             for (const manager of proof.names) {
                 for (const line of manager.lines) assert(line.fits, `${manager.name}: ${line.text} must fit`);
             }
             return proof;
         });
-        for (const [width, height] of [[360,640],[375,667]]) {
+        for (const [width, height] of [[360,640],[375,667],[1440,900]]) {
             for (const status of ['paused','setup'] as const) {
-                await check(`${width}x${height} narrow ${status} Release stays reachable with keyboard confirmation`,
-                    async () => {
-                        viewerToken = token; await seed('partial');
-                        if (status === 'setup') await configure({ draft: { status, lotId: null, nominatorId: null } });
-                        await browser('set', 'viewport', String(width), String(height)); await open(); await tab('Teams');
-                        const selector = '.team-row:has([aria-controls="team-roster-2"]) .release';
-                        assert(await evaluate(`!document.querySelector(${JSON.stringify(selector)}).getClientRects().length`));
-                        await inspectTeam(2); await browser('press', 'Tab');
-                        await until(`document.activeElement===document.querySelector(${JSON.stringify(selector)})`);
-                        assertSlots(await evaluate<Measurements>(measure('#team-roster-2')), await getState(), 2, true);
-                        const proof = await teamNames();
-                        assert(proof.names.every(manager => manager.aligned));
-                        assert(await evaluate(`(() => {
-                            const button=document.querySelector(${JSON.stringify(selector)});
-                            const scroll=button.closest('.scroll'),r=button.getBoundingClientRect();
-                            const s=scroll.getBoundingClientRect();
-                            scroll.scrollTop+=r.top-s.top-(scroll.clientHeight-r.height)/2;
-                            const b=button.getBoundingClientRect();
-                            return b.left>=s.left&&b.right<=s.right&&b.top>=s.top&&b.bottom<=s.bottom
-                                &&button.contains(document.elementFromPoint((b.left+b.right)/2,(b.top+b.bottom)/2));
-                        })()`));
-                        await browser('focus', selector); await browser('press', 'Enter');
-                        assert.equal((await getState()).managers[1].claimed, true);
-                        assert(await evaluate(`document.querySelector(${JSON.stringify(selector)})
-                            .textContent.includes('Release Matthew?')`));
-                        await browser('screenshot', `${evidence}/${width}x${height}-${status}-release-confirm.png`);
-                        await browser('press', 'Enter');
-                        await until(`!document.querySelector(${JSON.stringify(selector)})`);
-                        assert.equal((await getState()).managers[1].claimed, false);
-                        memberToken = tokens[1] = await claimSeat(2);
-                        return proof;
-                    });
+                await check(`${width}x${height} ${status} commissioner Teams view has no seat Release control`, async () => {
+                    viewerToken = token; await seed('partial');
+                    if (status === 'setup') await configure({ draft: { status, lotId: null, nominatorId: null } });
+                    await browser('set', 'viewport', String(width), String(height)); await open();
+                    if (width <= 860) await tab('Teams');
+                    await inspectTeam(2);
+                    assertSlots(await evaluate<Measurements>(measure('#team-roster-2')), await getState(), 2, true);
+                    assert(await evaluate(`!document.querySelector('.teams .release, .teams .with-admin')`));
+                    const proof = await teamNames();
+                    assert(proof.names.every(manager => manager.aligned));
+                    return proof;
+                });
             }
         }
         for (const [width, height] of [[1440,900],[390,844]]) {
@@ -663,16 +643,15 @@ async function main() {
             await tab('Teams'); assert.equal(await evaluate('document.querySelectorAll("#team-roster-2").length'), 1);
             await browser('screenshot', `${evidence}/390x667-details-recovery.png`);
         });
-        await check('Team inspection preserves commissioner Release and nomination labels', async () => {
+        await check('Team inspection survives live updates and keeps the nomination turn label', async () => {
             await seed('partial'); await open(); await tab('Teams'); await inspectTeam(2);
             const row = '.team-row:has([aria-controls="team-roster-2"])';
             assert(await evaluate(`document.querySelector(${JSON.stringify(row)})?.textContent.includes('12/20')`));
-            await browser('click', `${row} .release`); await browser('click', `${row} .release`);
-            await until(`!document.querySelector(${JSON.stringify(row + ' .release')})`);
-            assert.equal((await getState()).managers[1].claimed, false);
+            await configure({ managers: [{ id: 2, budget: 900 }] });
+            await until(`document.querySelector(${JSON.stringify(row)})?.textContent.includes('$900')`);
             assert.equal(await evaluate('document.querySelectorAll("#team-roster-2").length'), 1);
-            assert(await evaluate('document.querySelector(".team-row:has([aria-controls=team-roster-3])")'
-                + '.textContent.includes("Nominated")'));
+            assert(await evaluate('document.querySelector(".team-row:has([aria-controls=team-roster-3]) .turn-col")'
+                + '.textContent.trim() === "Now"'));
         });
         await check('The unassigned Active fallback keeps twenty spots with open placeholders', async () => {
             const guards = players.filter(player => player.positions.length === 1 && player.positions[0] === 'PG')

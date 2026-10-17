@@ -507,10 +507,9 @@ function teamStatus(state: AuctionState, manager: Manager) {
 }
 
 export function TeamsPanel(props: RoomProps) {
-  const { state, me, busy, send } = props;
+  const { state, me } = props;
   const [inspectedId, setInspectedId] = useState<number | null>(null);
   const current = findPlayer(state, state.lot?.playerId);
-  const seatsEditable = me.commissioner && (state.draft.status === 'setup' || state.draft.status === 'paused');
   const live = state.draft.status === 'running' || state.draft.status === 'paused';
   const upcoming = live ? upcomingNominators(state) : [];
   return (
@@ -519,11 +518,10 @@ export function TeamsPanel(props: RoomProps) {
         <div className="priority" aria-label="Tie priority"><strong>Tie priority · highest first</strong>
           <p>{state.draft.tiePriority?.map(id => nameOf(state, id)).join(' → ') || 'Set when the draft starts'}</p>
         </div>
-        <div className={`table-head team-grid ${seatsEditable ? 'with-admin' : ''} ${live ? 'with-turn' : ''}`}>
+        <div className={`table-head team-grid ${live ? 'with-turn' : ''}`}>
           <span>Team</span><span>Left</span><span title={current ? `Max bid on ${current.name}` : 'Max bid'}>Max</span>
           <span>Active</span><span>Taxi</span><span>IR</span>
           {live && <span title="Nominations until this team's turn">Turn</span>}
-          {seatsEditable && <span className="team-release-heading" />}
         </div>
         {state.managers.map(manager => {
           const entries = entriesOf(state, manager.id);
@@ -534,7 +532,7 @@ export function TeamsPanel(props: RoomProps) {
           const turnLabel = !live ? '' : manager.id === state.draft.nominatorId ? 'Now'
             : upcoming.includes(manager.id) ? String(upcoming.indexOf(manager.id) + 1) : '—';
           const turn = !state.lot && state.draft.nominatorId === manager.id && state.draft.status !== 'complete';
-          const rowClass = ['team-row', 'team-grid', seatsEditable ? 'with-admin' : '', live ? 'with-turn' : '',
+          const rowClass = ['team-row', 'team-grid', live ? 'with-turn' : '',
             manager.id === me.id ? 'me' : '', turn ? 'turn' : '',
             inspectedId === manager.id ? 'inspected' : ''].join(' ');
           return (
@@ -552,11 +550,6 @@ export function TeamsPanel(props: RoomProps) {
                     </svg>
                   </button>
                   {status.text && <span className={`status ${status.tone}`}>{status.text}</span>}
-                  {live && turnLabel !== '—' && (
-                    <span className="turn-inline">
-                      {turnLabel !== 'Now' ? `Turn ${turnLabel}` : state.lot ? 'Nominated' : 'Nominating'}
-                    </span>
-                  )}
                 </span>
                 <span className="num">{dollars(manager.budget)}</span>
                 <span className="num">{dollars(maximum)}</span>
@@ -566,16 +559,6 @@ export function TeamsPanel(props: RoomProps) {
                 {live && (
                   <span className="num turn-col" title={turnLabel === '—' ? 'Not in the nomination rotation' : undefined}>
                     {turnLabel}
-                  </span>
-                )}
-                {seatsEditable && (
-                  <span className="team-release">
-                    {manager.claimed && manager.id !== me.id && seatsEditable && (
-                      <ConfirmButton className="release ghost small" label="Release" confirmLabel={`Release ${manager.name}?`}
-                        disabled={busy}
-                        title={`Release ${manager.name}'s seat so they can rejoin on another device`}
-                        onConfirm={() => void send({ type: 'release', managerId: manager.id })} />
-                    )}
                   </span>
                 )}
               </div>

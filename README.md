@@ -1,12 +1,12 @@
 # Pancake Auction
 
 Pancake Auction runs one sealed-bid lot at a time. Convex owns deadlines, final responses, roster checks, and awards.
-The Next.js room uses seat tokens and subscriptions. Ten managers start with $1,000 each.
+The Next.js room uses trusted seat selection and subscriptions. Ten managers start with $1,000 each.
 
 ## Setup
 
 Use Node 24 or later. Install dependencies with `npm ci`.
-These steps initialize a new local league. Preserve the data and claimed seats of an existing league.
+These steps initialize a new local league. Preserve the data of an existing league.
 
 Start the local backend in one terminal and keep it running:
 
@@ -46,13 +46,13 @@ Use `npm run dev -- -p 3001` or set `PORT` to select another frontend port.
 A local production preview uses `npm run build`, then `npm run start -- -p 3000`.
 The backend must remain running for that preview too.
 
-To recover a claimed seat, run:
+To forget a device token saved by the earlier exclusive-seat build, run:
 
 ```sh
 npm run seat:release -- --name "<manager name>"
 ```
 
-Manager setup, import, readiness, and seat recovery use the local Convex CLI admin path.
+Manager setup, import, readiness, and token release use the local Convex CLI admin path.
 Their internal functions are unavailable to public clients.
 
 | Variable | Purpose |
@@ -120,9 +120,9 @@ Resolution publishes every manager's response, including automatic and deadline 
 Results expands each recent lot to show those responses. Older sales load their bids on demand through `auction:result`.
 That indexed query returns nothing for open or void lots.
 
-`auction:privateSeat` requires a seat token. It returns only that seat's current response and nomination queue.
+`auction:privateSeat` requires a seat reference. It returns only that seat's current response and nomination queue.
 It uses indexed owner lookups. The commissioner has no private-data override.
-A released token loses access. A replacement token inherits the same manager's queue and final response.
+Every device on the same seat sees the same queue and final response; the response stays final from any device.
 
 Tap **+ Queue** on a player row, or open a player's details to add them with an amount.
 Each entry has a player and an optional positive whole-dollar amount. Blank means no attached response.
@@ -140,7 +140,7 @@ Paused queues wait until resume. Empty queues receive the normal 24-hour manual 
 
 ## Pause, undo, and commissioner controls
 
-Only the commissioner starts, pauses, resumes, undoes, or releases seats.
+Only the commissioner starts, pauses, resumes, or undoes.
 Pause stores the exact remaining milliseconds. Resume creates a deadline from that remainder.
 Responses and nominations are unavailable while paused. Queue edits and legal roster moves remain available.
 There is no early force-award or force-end control.
@@ -182,7 +182,6 @@ A draft without `mode: sealed-v1` is legacy. Running, paused, and completed lega
 Scheduled jobs also ignore them. Their old event payloads are not returned publicly.
 An open legacy lot exposes no standing amount through public state.
 The commissioner must arrange an explicit migration for an in-progress legacy draft; no automatic conversion exists.
-Seat recovery remains available.
 
 An untouched legacy setup opens the normal setup room. Commissioner Start converts it to sealed mode through the existing server checks.
 Start refuses a legacy setup containing any lot or roster entry and displays the server error.
@@ -190,7 +189,7 @@ Queue controls stay disabled until Start converts the setup. Legacy roster place
 
 `league:managers` upgrades an empty legacy setup record to sealed defaults.
 It refuses when any lot or roster entry exists or the draft has left setup.
-It preserves manager identities and seat tokens. Starting remains a separate commissioner action.
+It preserves manager identities. Starting remains a separate commissioner action.
 `league:check` requires sealed mode, 24-hour nomination and bid settings, ten managers, and a completed player import.
 
 ## Player data and nomination ranking
@@ -222,10 +221,13 @@ Import is refused after any draft activity. Verification uses recorded data and 
 
 ## Identity and installation
 
-The first device to claim a seat receives 256 random bits. Convex stores only its SHA-256 hash.
-The browser stores the seat token in localStorage. Mutations derive the acting manager from that token.
-Anyone with the league link can claim an unclaimed seat. Share it only with managers.
-The release CLI remains available for commissioner seat recovery.
+This league trusts its managers. Anyone with the link picks a name from the list; there is no password, code or lock,
+so a manager can open their team on several phones, browsers or the installed app at once, and could pick another name.
+This is trusted identity selection, not authentication. Share the link only with the league.
+Selecting a name returns the nonsecret seat reference `seat:<manager id>`. The browser remembers it in localStorage,
+and mutations derive the acting manager from it. Tapping your name in the top bar switches manager.
+The first selection marks a manager as joined. Sealed amounts never appear in public state, whichever name is selected.
+A 256-bit device token saved by the earlier exclusive-seat build still opens its seat and is converted on load.
 
 The room is one screen tall on desktop, tablet and phone, including the installed web app. The page itself never scrolls; only panels do.
 The top bar always shows your name, budget left and active roster count. The current-player card keeps the deadline,
@@ -238,6 +240,9 @@ Player search, positions, projections, detailed stats, roster inspection, and pl
 
 A web manifest adds the Pancake name, two PNG icons, theme colors, and `display: standalone`.
 Apple web-app metadata and an Apple touch icon support Safari installation.
+The icon (a basketball on a syrup pancake stack, on an opaque dark background) is drawn in `public/icon.svg`.
+`apple-touch-icon.png` (180), `icon-192.png`, `icon-512.png` and `favicon.ico` are opaque renders of that file,
+for example `rsvg-convert -w 180 -h 180 public/icon.svg`, flattened to RGB.
 The layout includes safe-area padding and dynamic viewport height. Installation adds no offline bidding or background response automation.
 The `emulated-standalone` CSS class is a layout-only test hook. It changes no auction behavior.
 
