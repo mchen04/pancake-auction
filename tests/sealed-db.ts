@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { ConvexClient } from 'convex/browser';
 import { api } from '../convex/_generated/api';
-import { AuctionClient } from '../lib/client';
+import { AuctionClient, RuleError } from '../lib/client';
 import { counts, legalPlacements, timeoutNominee } from '../lib/rules';
 import { DAY, legalMaximum } from '../lib/sealed';
 import type { AuctionState, Entry } from '../lib/types';
@@ -320,19 +320,81 @@ async function main() {
             await client.act({ type: 'bid', lotId: current.lot!.id, amount: 82 }, tokens[0]);
             await deny(client.act({ type: 'place', playerId: rookie.id, placement: 'taxi' }, tokens[0]), /invalidate/);
         });
-        await check('Legacy document shapes validate; in-progress legacy auction never advances; setup migration never starts draft', async () => {
+        await check('Exact legacy setup: claimed seats, commissioner-only Start, sealed defaults and first scheduled turn', async () => {
             await reset();
-            await backend.admin('testOnly:legacy', { running: true });
-            const before = await backend.admin('admin:inspect');
-            await deny(client.act({ type: 'pass', lotId: 1 }, tokens[1]), /Legacy/);
-            await deny(client.act({ type: 'pause' }, tokens[0]), /Legacy/);
+            await backend.admin('testOnly:legacy', { status: 'setup', unclaimed: true });
+            const original = await backend.admin('admin:inspect');
+            const { _id, _creationTime, ...document } = original.draft;
+            assert(_id && _creationTime);
+            assert.deepEqual(document, { key: 'auction', version: 0, nextLot: 1, nextEvent: 1, value: {
+                status: 'setup', nominationGeneration: '', turnSequence: 0, phase: 'nomination', order: [],
+                turnIndex: 0, nominatorId: null, lotId: null, deadline: null, remainingMs: null,
+                nominationMs: 10000, biddingMs: 10000, extensionMs: 5000, capMs: 15000,
+                passedTurns: [], completionReason: null
+            } });
+            assert.equal(original.managers.length, 10);
+            assert(original.managers.every((m: { budget: number; done: boolean; claimed: boolean }) =>
+                m.budget === 1000 && !m.done && !m.claimed));
+            assert.equal(original.pool.count, source.players.length);
+            assert.equal(original.roster.length, 0);
+            assert.equal(original.lots.length, 0);
+            tokens = await Promise.all(clients.map((client, index) => client.claim(index + 1)));
+            const claimed = (await backend.admin('admin:inspect')).draft;
+            await assert.rejects(client.act({ type: 'start' }, tokens[1]), error =>
+                error instanceof RuleError && error.status === 403 && /Commissioner/.test(error.message));
+            await deny(client.queue({ type: 'add', playerId: source.players[0].id }, tokens[0]), /Legacy/);
+            assert.deepEqual((await backend.admin('admin:inspect')).draft, claimed);
+            await start();
+            const started = await state();
+            assert.equal(started.draft.mode, 'sealed-v1');
+            assert.equal(started.draft.status, 'running');
+            assert.deepEqual([...started.draft.order].sort((a,b) => a - b), [1,2,3,4,5,6,7,8,9,10]);
+            assert.deepEqual(started.draft.tiePriority, [...started.draft.order].reverse());
+            assert.equal(started.draft.nominatorId, started.draft.order[0]);
+            assert.equal(started.draft.phase, 'nomination');
+            assert.equal(started.draft.nominationMs, DAY);
+            assert.equal(started.draft.biddingMs, DAY);
+            const audit = await backend.admin('admin:inspect');
+            const turnEvent = audit.events.find((event: { type: string }) => event.type === 'turn');
+            assert.equal(started.draft.deadline! - turnEvent.at, DAY);
+            const scheduled = await backend.admin('testOnly:scheduledDeadlines');
             const job = await snapshot();
-            await backend.admin('auction:expire', job);
-            assert.deepEqual((await backend.admin('admin:inspect')).draft.value, before.draft.value);
-            assert.equal((await state()).lot?.highBid, 0);
-            assert.equal((await state()).recentEvents.length, 0);
+            const firstTurn = scheduled.find((entry: { args: { draftId: string; version: number }[] }) =>
+                entry.args[0]?.draftId === job.draftId && entry.args[0]?.version === job.version);
+            assert(firstTurn, 'Start must schedule the first nomination deadline');
+            assert.match(firstTurn.name, /^auction(?:\.js)?:expire$/);
+            assert.deepEqual(firstTurn.args, [job]);
+            assert.equal(firstTurn.scheduledTime, job.deadline);
+            evidence.legacySetup = { sourceRevision: 'e0a9889', original: document, started: started.draft, firstTurn };
+        });
+        await check('Legacy setup with a lot or roster refuses Start without changing the draft', async () => {
+            for (const data of ['lot', 'roster']) {
+                await reset();
+                await backend.admin('testOnly:legacy', { status: 'setup', data });
+                const before = await backend.admin('admin:inspect');
+                await deny(client.act({ type: 'start' }, tokens[0]), data === 'lot'
+                    ? /Existing lots require commissioner migration/ : /Legacy draft contains auction data/);
+                assert.deepEqual((await backend.admin('admin:inspect')).draft, before.draft);
+                assert.equal((await state()).draft.mode, undefined);
+            }
+        });
+        await check('Legacy running, paused and completed drafts reject sealed actions and ignore scheduled jobs', async () => {
+            for (const status of ['running', 'paused', 'complete']) {
+                await reset();
+                await backend.admin('testOnly:legacy', { status });
+                const before = await backend.admin('admin:inspect');
+                await deny(client.act({ type: 'start' }, tokens[0]), /Legacy/);
+                await deny(client.act({ type: 'pass', lotId: 1 }, tokens[1]), /Legacy/);
+                await deny(client.act({ type: status === 'paused' ? 'resume' : 'pause' }, tokens[0]), /Legacy/);
+                await backend.admin('auction:expire', await snapshot());
+                assert.deepEqual((await backend.admin('admin:inspect')).draft, before.draft);
+                if (status !== 'complete') assert.equal((await state()).lot?.highBid, 0);
+                assert.equal((await state()).recentEvents.length, 0);
+            }
+        });
+        await check('Legacy manager setup migration never starts a draft; earlier completion labels still load', async () => {
             await reset();
-            await backend.admin('testOnly:legacy', { running: false });
+            await backend.admin('testOnly:legacy', { status: 'setup' });
             await backend.admin('admin:managers');
             const migrated = await state();
             assert.equal(migrated.draft.mode, 'sealed-v1');

@@ -201,6 +201,7 @@ async function main() {
     try {
         await backend.admin('admin:managers');
         await backend.admin('admin:importPlayers', { players: source.players, ...source.importMetadata, startedAt: Date.now() });
+        await backend.admin('testOnly:legacy', { status: 'setup', unclaimed: true });
         const port = await freePort();
         const development = process.env.AUCTION_NEXT_DEV === '1';
         server = ownProcess(spawn(process.execPath, ['node_modules/next/dist/bin/next', development ? 'dev' : 'start',
@@ -229,17 +230,36 @@ async function main() {
         };
         await browser.open(base);
         if (mode !== 'webkit') await browser.resize(1440, 1000);
-        await check('Claim seat; reconnect restores identity; start uses all ten managers', async () => {
+        await check('Legacy setup: claim commissioner, restore seat, wait to queue, then Start converts the room', async () => {
             await until('document.querySelectorAll(".seat-grid button").length === 10');
             await browser!.click('.seat-grid button:first-child');
+            await until('Boolean(document.querySelector(".me")) || document.body.innerText.includes("Legacy draft is read-only")');
+            await screenshot('legacy-setup');
+            assert.equal(await browser!.evaluate('document.body.innerText.includes("Legacy draft is read-only")'), false);
             await until('document.querySelector(".me")?.textContent === "Michael"');
+            assert.equal(await browser!.evaluate('document.querySelector(".nomination h2")?.textContent'), '1 of 10 managers joined');
+            assert.equal(await browser!.evaluate('document.querySelector(".nomination .primary")?.textContent'), 'Start draft');
+            assert.equal(await browser!.evaluate('document.querySelector(".pool-row .queue-quick")?.disabled'), true);
+            await browser!.click('.pool .table-head + .pool-row .name-button');
+            await until('Boolean(document.querySelector(".queue-add button"))');
+            assert.equal(await browser!.evaluate('document.querySelector(".queue-add button")?.disabled'), true);
+            assert.match(await browser!.evaluate<string>('document.querySelector(".queue-add").textContent'), /Available when the commissioner starts/);
+            await browser!.click('.pool .table-head + .pool-row .name-button');
+            await tab('Queue');
+            assert.match(await browser!.evaluate<string>('document.querySelector(".queue").textContent'), /Available when the commissioner starts/);
+            await tab('Players');
             tokens[0] = await browser!.evaluate<string>('localStorage.getItem("pancake-seat")');
             for (let id = 2; id <= 10; id++) tokens[id - 1] = await client.claim(id);
             await browser!.open(base);
             await until('document.querySelector(".me")?.textContent === "Michael"');
             await browser!.click('.nomination .primary');
             await until('!document.querySelector(".nomination .primary")');
-            assert.equal((await client.state()).draft.order.length, 10);
+            const started = (await client.state()).draft;
+            assert.equal(started.mode, 'sealed-v1');
+            assert.equal(started.status, 'running');
+            assert.equal(started.order.length, 10);
+            assert.deepEqual(started.tiePriority, [...started.order].reverse());
+            await screenshot('legacy-started');
             assert.equal(await browser!.evaluate('document.body.innerText.includes("Force end")'), false);
         });
         const ranked = [...source.players].sort((a,b) => (b.projection ?? -Infinity) - (a.projection ?? -Infinity));
@@ -518,6 +538,21 @@ async function main() {
                 assert(geometry.panelHeight >= 100, 'Standalone panels retain usable scroll space');
             }
             await screenshot('emulated-standalone');
+        });
+        await check('Legacy setup with auction data shows the Start error; legacy running stays read-only', async () => {
+            await backend.admin('testOnly:reset');
+            await backend.admin('testOnly:legacy', { status: 'setup', data: 'lot' });
+            await until('document.querySelector(".nomination .primary")?.textContent === "Start draft"');
+            const before = (await backend.admin('admin:inspect')).draft.value;
+            await browser!.click('.nomination .primary');
+            await until('document.querySelector(".toast")?.textContent.includes("Existing lots require commissioner migration")');
+            assert.deepEqual((await backend.admin('admin:inspect')).draft.value, before);
+            await screenshot('legacy-start-refused');
+            await backend.admin('testOnly:reset');
+            await backend.admin('testOnly:legacy', { status: 'running' });
+            await until('document.body.innerText.includes("Legacy draft is read-only")');
+            assert.equal(await browser!.evaluate('Boolean(document.querySelector(".nomination .primary"))'), false);
+            await screenshot('legacy-running-read-only');
         });
     } catch (error) {
         evidence.error = String(error);

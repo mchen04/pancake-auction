@@ -139,7 +139,7 @@ export default function Room() {
     );
   }
   const d = state.draft;
-  if (d.mode !== 'sealed-v1') return <main className="gate"><h1 className="wordmark">Pancake Auction</h1>
+  if (d.mode !== 'sealed-v1' && d.status !== 'setup') return <main className="gate"><h1 className="wordmark">Pancake Auction</h1>
     <p>Legacy draft is read-only. Commissioner migration is required.</p></main>;
   const turnKey = (d.status === 'running' || d.status === 'paused')
     && d.phase === 'nomination' && d.nominatorId === me.id

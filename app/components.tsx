@@ -615,7 +615,7 @@ function moveBlocker(props: RoomProps, entry: Entry, placement: Placement) {
 
 function PlacementSwitch(props: RoomProps & { entry: Entry }) {
   const { entry, busy, send, state } = props;
-  if (state.draft.status === 'complete') return null;
+  if (state.draft.mode !== 'sealed-v1' || state.draft.status === 'complete') return null;
   const moves = (['active', 'taxi', 'ir'] as Placement[])
     .filter(placement => placement !== entry.placement && !moveBlocker(props, entry, placement));
   if (!moves.length) return null;
@@ -874,14 +874,15 @@ export function turnsUntil(state: AuctionState, me: Manager) {
 function QueueAdd(props: RoomProps & { player: Player }) {
   const [amount, setAmount] = useState('');
   const value = amount === '' ? undefined : Number(amount);
-  const error = nominationBlocker(props, props.player, value);
+  const legacy = props.state.draft.mode !== 'sealed-v1';
+  const error = legacy ? 'Available when the commissioner starts the draft.' : nominationBlocker(props, props.player, value);
   const queued = props.privateSeat?.queue.some(entry => entry.playerId === props.player.id);
   return <form className="queue-add" onSubmit={event => {
     event.preventDefault();
     if (!error) void props.editQueue?.({ type: 'add', playerId: props.player.id, ...(value === undefined ? {} : { amount: value }) });
   }}>
     <input aria-label={`Queue bid for ${props.player.name}`} inputMode="numeric" placeholder="Optional sealed bid"
-      value={amount} onChange={event => setAmount(event.target.value)} />
+      disabled={legacy} value={amount} onChange={event => setAmount(event.target.value)} />
     <button disabled={props.busy || !props.connected || !!error || queued || props.state.draft.status === 'complete'}>
       {queued ? 'Queued' : 'Add to my queue'}</button>
     {error && <span>{error}</span>}
@@ -894,7 +895,8 @@ function QuickQueue(props: RoomProps & { player: Player }) {
     return <small className="blocked">No spot</small>;
   }
   return <button className={`queue-quick ${queued ? 'queued' : ''}`}
-    disabled={props.busy || !props.connected || !privateSeat || queued}
+    disabled={props.busy || !props.connected || !privateSeat || queued || props.state.draft.mode !== 'sealed-v1'}
+    title={props.state.draft.mode !== 'sealed-v1' ? 'Available when the commissioner starts the draft.' : undefined}
     aria-label={queued ? `${player.name} is in your queue` : `Add ${player.name} to your queue`}
     onClick={event => {
       event.stopPropagation();
@@ -948,7 +950,9 @@ export function QueuePanel(props: RoomProps) {
       <span>Private · runs only on your turn</span>
     </div>
     <div className="scroll">
-      {entries.length ? <ol className="queue-list">{entries.map((entry, index) => <QueueRow {...props}
+      {props.state.draft.mode !== 'sealed-v1'
+        ? <p className="empty-note">Available when the commissioner starts the draft.</p>
+        : entries.length ? <ol className="queue-list">{entries.map((entry, index) => <QueueRow {...props}
         key={`${entry.id}:${entry.amount ?? ''}`} entry={entry} index={index} entries={entries} />)}</ol>
         : <p className="empty-note">Empty. Tap <strong>+ Queue</strong> on a player. When your turn starts,
           the first legal player is nominated for you.</p>}

@@ -80,25 +80,42 @@ export const simulatedExpiry = internalMutation({ args: { snapshot: v.object({ d
 handler: async (ctx, args) => {
     await expireDraft(ctx, args.snapshot, args.now);
 } });
-export const legacy = internalMutation({ args: { running: v.boolean() }, handler: async (ctx, args) => {
+export const scheduledDeadlines = internalQuery({ args: {}, handler: async ctx => {
+    return (await ctx.db.system.query('_scheduled_functions').collect())
+        .filter(job => job.state.kind === 'pending')
+        .map(job => ({ name: job.name, args: job.args, scheduledTime: job.scheduledTime }));
+} });
+export const legacy = internalMutation({ args: {
+    status: v.union(v.literal('setup'), v.literal('running'), v.literal('paused'), v.literal('complete')),
+    data: v.optional(v.union(v.literal('lot'), v.literal('roster'))), unclaimed: v.optional(v.boolean())
+}, handler: async (ctx, args) => {
     const record = (await draftRecord(ctx))!;
-    const value = { ...record.value };
-    delete value.mode;
-    delete value.tiePriority;
-    value.nominationMs = 10000;
-    value.biddingMs = 10000;
-    value.extensionMs = 5000;
-    value.capMs = 15000;
-    if (args.running) {
-        const player = (await ctx.db.query('pools').unique())!.players[0];
-        value.status = 'running';
+    const value: Draft = { status: 'setup', nominationGeneration: '', turnSequence: 0,
+        phase: 'nomination', order: [], turnIndex: 0, nominatorId: null, lotId: null, deadline: null,
+        remainingMs: null, nominationMs: 10000, biddingMs: 10000, extensionMs: 5000, capMs: 15000,
+        passedTurns: [], completionReason: null };
+    const player = (await ctx.db.query('pools').unique())!.players[0];
+    if (args.unclaimed) for (const manager of await ctx.db.query('managers').collect())
+        await ctx.db.patch(manager._id, { tokenHash: null });
+    if (args.status !== 'setup') {
+        value.status = args.status;
+        value.order = [1,2,3,4,5,6,7,8,9,10];
+        value.nominatorId = 1;
         value.phase = 'bidding';
         value.lotId = 1;
         value.deadline = Date.now() - 1;
+        if (args.status === 'paused') value.remainingMs = 5000;
+    }
+    if (args.status !== 'setup' || args.data === 'lot') {
         await ctx.db.insert('lots', { id: 1, playerId: player.id, nominatorId: 1,
-            highBidderId: 1, highBid: 73, status: 'open', player });
+            highBidderId: 1, highBid: 73, status: args.status === 'complete' ? 'sold' : 'open', player });
+    }
+    if (args.data === 'roster') await ctx.db.insert('roster', {
+        playerId: player.id, managerId: 1, placement: 'active', price: 73, lotId: 1, player
+    });
+    if (args.status !== 'setup') {
         await ctx.db.insert('passes', { lotId: 1, managerId: 2 });
         await ctx.db.insert('events', { id: 1, type: 'bid', managerId: 1, lotId: 1, data: { amount: 73 }, at: Date.now() });
     }
-    await ctx.db.patch(record._id, { value });
+    await ctx.db.replace(record._id, { key: 'auction', value, version: 0, nextLot: 1, nextEvent: 1 });
 } });

@@ -274,7 +274,7 @@ export async function transaction<T>(ctx: MutationCtx, token: string | undefined
         return { ok: true as const, value: value ?? null, serverNow: now };
     } catch (error) {
         if (!(error instanceof RuleError)) throw error;
-        if (validated) await store.save(state);
+        if (validated && state.draft.mode === 'sealed-v1') await store.save(state);
         return { ok: false as const, error: error.message, status: error.status, serverNow: now };
     }
 }

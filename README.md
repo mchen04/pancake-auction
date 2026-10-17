@@ -173,7 +173,7 @@ An incorrect device clock cannot change a deadline or make a late response valid
 The schema retains all legacy tables and required field types, including `passes`, live-lot price fields, and old timing fields.
 New draft mode, priority, lot response metadata, result bids, and event markers are optional.
 The new `responses` and `queues` tables do not alter existing documents.
-Adding indexes does not require document rewrites. No migration wipes data or starts a draft.
+Adding indexes does not require document rewrites. Schema changes do not wipe data or start a draft.
 The stored `passedTurns` field remains compatible but has no effect on nomination or completion.
 Previously completed drafts with `completionReason: full-cycle-unsold` still load and show an earlier-rules label.
 They are not reopened automatically.
@@ -183,6 +183,10 @@ Scheduled jobs also ignore them. Their old event payloads are not returned publi
 An open legacy lot exposes no standing amount through public state.
 The commissioner must arrange an explicit migration for an in-progress legacy draft; no automatic conversion exists.
 Seat recovery remains available.
+
+An untouched legacy setup opens the normal setup room. Commissioner Start converts it to sealed mode through the existing server checks.
+Start refuses a legacy setup containing any lot or roster entry and displays the server error.
+Queue controls stay disabled until Start converts the setup. Legacy roster placement controls remain hidden.
 
 `league:managers` upgrades an empty legacy setup record to sealed defaults.
 It refuses when any lot or roster entry exists or the draft has left setup.
