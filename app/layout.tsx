@@ -3,6 +3,7 @@ import { Barlow_Condensed, IBM_Plex_Sans } from 'next/font/google';
 import './globals.css';
 import { connection } from 'next/server';
 import { AuctionProvider } from './provider';
+import { AppUpdater } from './updater';
 
 const display = Barlow_Condensed({ subsets: ['latin'], weight: ['600', '700'], variable: '--font-display' });
 const body = IBM_Plex_Sans({ subsets: ['latin'], weight: ['400', '500', '600'], variable: '--font-body' });
@@ -23,5 +24,6 @@ export const viewport: Viewport = { width: 'device-width', initialScale: 1, view
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   await connection();
   const url = process.env.CONVEX_URL || process.env.NEXT_PUBLIC_CONVEX_URL;
-  return <html lang="en" className={`${display.variable} ${body.variable}`}><body><AuctionProvider url={url}>{children}</AuctionProvider></body></html>;
+  return <html lang="en" className={`${display.variable} ${body.variable}`} data-version={process.env.APP_VERSION}>
+    <body><AppUpdater /><AuctionProvider url={url}>{children}</AuctionProvider></body></html>;
 }

@@ -174,7 +174,7 @@ export default function Room() {
   const mine = counts(state.roster.filter(entry => entry.managerId === me.id));
   const queued = privateSeat?.queue.length ?? 0;
   return (
-    <main className="room" data-tab={tab}>
+    <main className="room" data-tab={tab} data-busy={busy || undefined}>
       <header className="topbar">
         <h1 className="wordmark">Pancake Auction</h1>
         <p className={`headline ${state.draft.status}`}>{headline(state, me, privateSeat)}</p>

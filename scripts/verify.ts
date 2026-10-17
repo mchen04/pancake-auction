@@ -17,7 +17,7 @@ async function main() {
         throw new Error(`Local verification needs 1 GiB of free disk; available ${freeBytes} bytes`);
     }
     const commands = [['typecheck'], ['lint'], ['test'], ['test:local'], ['test:db'],
-        ['test:volume'], ['build'], ['test:layout'], ['test:ui'], ['test:seats'], ['test:room']];
+        ['test:volume'], ['build'], ['test:layout'], ['test:ui'], ['test:seats'], ['test:room'], ['test:update']];
     const results: {
         command: string;
         exitCode: number;

@@ -337,7 +337,7 @@ function BidControls(props: RoomProps & { player: Player | undefined }) {
           <label className="money">
             <span aria-hidden="true">$</span>
             <input aria-label="Sealed bid amount" inputMode="numeric" pattern="[0-9]*" enterKeyHint="send" autoComplete="off"
-              placeholder={maximum >= 1 ? `1–${maximum}` : 'Whole dollars'} value={custom}
+              placeholder={maximum >= 1 ? `1–${maximum}` : 'Whole dollars'} value={custom} data-unsaved={custom !== '' || undefined}
               onChange={event => setCustom(event.target.value)} disabled={blocked} />
           </label>
           <button className="primary" disabled={blocked || !valid}>
@@ -360,7 +360,7 @@ function OpeningBid({ opening, setOpening }: {
     <label className="money">
       <span aria-hidden="true">$</span>
       <input aria-label="Optional nomination bid" inputMode="numeric" pattern="[0-9]*" autoComplete="off" placeholder="No bid"
-        value={opening ?? ''}
+        value={opening ?? ''} data-unsaved={opening !== undefined || undefined}
         onChange={event => setOpening(event.target.value === '' ? undefined : Number(event.target.value))} />
     </label>
     <span>Optional sealed bid. Leave blank to bid later like everyone else.</span>
@@ -790,8 +790,9 @@ export function ResultsPanel({ state }: RoomProps) {
   );
 }
 
-function ConfirmButton({ label, confirmLabel, disabled, className, onConfirm, title }: {
-  label: string; confirmLabel: string; disabled: boolean; className: string; onConfirm: () => void; title?: string;
+function ConfirmButton({ label, compactLabel, confirmLabel, disabled, className, onConfirm, title }: {
+  label: string; compactLabel?: string; confirmLabel: string; disabled: boolean; className: string; onConfirm: () => void;
+  title?: string;
 }) {
   const [armed, setArmed] = useState(false);
   useEffect(() => {
@@ -803,7 +804,8 @@ function ConfirmButton({ label, confirmLabel, disabled, className, onConfirm, ti
     <button className={`${className} ${armed ? 'armed' : ''}`} disabled={disabled} title={title}
       aria-label={armed ? confirmLabel : label}
       onClick={() => { if (armed) { setArmed(false); onConfirm(); } else setArmed(true); }}>
-      {armed ? confirmLabel : label}
+      {armed ? confirmLabel : compactLabel
+        ? <><span className="wide-label">{label}</span><span className="compact-label">{compactLabel}</span></> : label}
     </button>
   );
 }
@@ -821,7 +823,7 @@ export function CommissionerBar({ state, busy, connected, send, pendingControl }
   if (d.status === 'setup' || d.status === 'complete') {
     return d.status === 'complete' && latestSale ? (
       <div className="commish">
-        <ConfirmButton key={`undo-${latestSale?.id ?? 'none'}`} className="ghost small" label="Undo last sale"
+        <ConfirmButton key={`undo-${latestSale?.id ?? 'none'}`} className="ghost small" label="Undo last sale" compactLabel="Undo"
           confirmLabel={undoLabel(state)} disabled={busy}
           onConfirm={() => latestSale && void send({ type: 'undo', lotId: latestSale.id })} />
       </div>
@@ -829,7 +831,7 @@ export function CommissionerBar({ state, busy, connected, send, pendingControl }
   }
   return (
     <div className="commish">
-      <ConfirmButton key={`undo-${latestSale?.id ?? 'none'}`} className="ghost small" label="Undo last sale"
+      <ConfirmButton key={`undo-${latestSale?.id ?? 'none'}`} className="ghost small" label="Undo last sale" compactLabel="Undo"
         confirmLabel={undoLabel(state)} disabled={busy || !latestSale} title="Returns the player and refunds the price, then pauses"
         onConfirm={() => latestSale && void send({ type: 'undo', lotId: latestSale.id })} />
       <button className="secondary small" disabled={busy || !connected} aria-busy={Boolean(pendingControl)}
@@ -865,7 +867,7 @@ function QueueAdd(props: RoomProps & { player: Player }) {
     if (!error) void props.editQueue?.({ type: 'add', playerId: props.player.id, ...(value === undefined ? {} : { amount: value }) });
   }}>
     <input aria-label={`Queue bid for ${props.player.name}`} inputMode="numeric" placeholder="Optional sealed bid"
-      disabled={legacy} value={amount} onChange={event => setAmount(event.target.value)} />
+      disabled={legacy} value={amount} data-unsaved={amount !== '' || undefined} onChange={event => setAmount(event.target.value)} />
     <button disabled={props.busy || !props.connected || !!error || queued || props.state.draft.status === 'complete'}>
       {queued ? 'Queued' : 'Add to my queue'}</button>
     {error && <span>{error}</span>}
@@ -913,7 +915,7 @@ function QueueRow(props: RoomProps & { entry: QueueEntry; index: number; entries
       <label className="money">
         <span aria-hidden="true">$</span>
         <input aria-label={`Queued bid for ${name}`} placeholder="No bid" inputMode="numeric" pattern="[0-9]*" autoComplete="off"
-          value={amount} onChange={event => setAmount(event.target.value)} />
+          value={amount} data-unsaved={dirty || undefined} onChange={event => setAmount(event.target.value)} />
       </label>
       <button disabled={props.busy || !valid || !dirty}>Save</button>
     </form>

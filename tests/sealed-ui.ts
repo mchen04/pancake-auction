@@ -379,7 +379,8 @@ async function main() {
             const sizes: ['phone' | 'desktop', number, number][] = [['phone', 390, 844], ['phone', 375, 667], ['phone', 360, 640],
                 ['phone', 320, 568], ['phone', 390, 500], ['phone', 844, 390], ['desktop', 1440, 900], ['desktop', 1280, 720],
                 ['desktop', 1220, 760], ['desktop', 1024, 700], ['desktop', 900, 600]];
-            const common = ['.wordmark', '.me', '.me-budget', '.commish button:last-child', '.deadline'];
+            // Phones drop the wordmark so the top bar stays one row (the installed app already carries the name).
+            const common = (width: number) => [...(width > 860 ? ['.wordmark'] : []), '.me', '.me-budget', '.commish button:last-child', '.deadline'];
             const states: { name: string; ready: string; required: string[]; setup: () => Promise<void> }[] = [
                 { name: 'bidding', ready: 'document.querySelector(".sealed-form input")?.disabled === false',
                     required: ['.response-count', '[aria-label="Sealed bid amount"]', '.sealed-form .primary', '.sealed-form .pass'],
@@ -408,6 +409,8 @@ async function main() {
                     return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height),
                         inView: r.width > 0 && r.height > 0 && r.x >= -1 && r.y >= -1 && r.right <= vw + 1 && r.bottom <= vh + 1,
                         hit: !!hit && (e === hit || e.contains(hit) || hit.contains(e)) }; };
+                const box = e => { if (!e) return null; const r = e.getBoundingClientRect();
+                    return { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right) }; };
                 const required = ${JSON.stringify(required)}.map(selector => { const e = document.querySelector(selector);
                     return e && visible(e) ? { selector, ...reach(e) } : { selector, missing: true }; });
                 const targets = [...document.querySelectorAll('.room button:not(.name-button), .room input, .room select, .room summary, .pool-row')]
@@ -439,13 +442,21 @@ async function main() {
                     const scroll = pool.querySelector('.scroll'), s = scroll.getBoundingClientRect();
                     const rows = [...pool.querySelectorAll('.pool-row')].filter(r => { const b = r.getBoundingClientRect();
                         return visible(r) && b.top >= s.top - 1 && b.bottom <= s.bottom + 1; }).map(line);
-                    table = { head: line(pool.querySelector('.table-head')), rows: rows.length,
+                    // Space between the bottom of the header labels (POS, AGE, ...) and the first player row.
+                    const head = pool.querySelector('.table-head'), first = pool.querySelector('.pool-row');
+                    const labels = [...head.children].filter(c => visible(c) && !c.classList.contains('sr-only')).map(extent).filter(Boolean);
+                    const posGap = first && labels.length ? Math.round(first.getBoundingClientRect().top - Math.max(...labels.map(r => r.bottom))) : null;
+                    table = { head: line(head), posGap, rows: rows.length,
                         rowGap: Math.min(...rows.map(r => r.gap)), crowded: rows.filter(r => r.gap < 8),
                         overflowX: scroll.scrollWidth - scroll.clientWidth };
                 }
                 return { viewport: [vw, vh], document: [de.scrollWidth, de.scrollHeight], body: [document.body.scrollWidth, document.body.scrollHeight],
                     bodyOverflow: getComputedStyle(document.body).overflow, tab: document.querySelector('.room').dataset.tab,
-                    tabsShown: getComputedStyle(document.querySelector('.tabbar')).display !== 'none', required, targets, panel, table };
+                    tabsShown: getComputedStyle(document.querySelector('.tabbar')).display !== 'none', required, targets, panel, table,
+                    thumb: { tabbar: box(document.querySelector('.tabbar')), block: box(document.querySelector('.block')),
+                        panel: box([...document.querySelectorAll('.pool, .queue, .roster, .results, .teams')].find(visible)),
+                        controls: [...document.querySelectorAll('.block .sealed-form > *, .block .opening input')].filter(visible)
+                            .map(e => ({ text: (e.getAttribute('aria-label') || e.textContent).trim(), ...box(e) })) } };
             })()`;
             const proofs: unknown[] = [];
             function assertOnePage(proof: { viewport: number[]; document: number[]; body: number[]; bodyOverflow: string;
@@ -459,10 +470,27 @@ async function main() {
                 for (const panel of proof.panel) assert(panel.scroll === null || panel.scroll >= 56, `${label}: ${panel.panel} scroll area ${panel.scroll}px`);
                 if (touch) for (const target of proof.targets) assert(target.h >= 44, `${label}: touch target ${target.text} is ${target.h}px`);
             }
+            type Box = { top: number; bottom: number; left: number; right: number };
+            // Touch layouts keep the tabs on the bottom edge; phones in portrait stack panel, decision card, then tabs,
+            // with the amount field and its buttons on one row in the lower half where thumbs reach. When the
+            // keyboard opens, iOS lifts that whole row with the focused field.
+            function assertThumb(proof: { viewport: number[]; thumb: { tabbar: Box; block: Box; panel: Box | null;
+                controls: (Box & { text: string })[] } }, label: string, portrait: boolean) {
+                const [, height] = proof.viewport;
+                const { tabbar, block, panel, controls } = proof.thumb;
+                assert(tabbar.bottom >= height - 12, `${label}: tabs end at ${tabbar.bottom}px, not at the bottom of ${height}px`);
+                if (!portrait) return;
+                assert(block.bottom <= tabbar.top + 1 && (!panel || panel.bottom <= block.top + 1),
+                    `${label}: expected panel, card, tabs from top to bottom ${JSON.stringify(proof.thumb)}`);
+                for (const control of controls) assert(control.top >= height / 2, `${label}: ${control.text} at ${control.top}px is out of thumb reach`);
+                const rows = new Set(controls.filter(control => control.text !== 'Optional nomination bid').map(control => control.top));
+                assert(rows.size <= 1, `${label}: bid field and its buttons are split across rows ${JSON.stringify(controls)}`);
+            }
             const tables = new Set<string>();
-            function assertTable(table: { head: { gap: number; labels: string[] }; rows: number; rowGap: number;
+            function assertTable(table: { head: { gap: number; labels: string[] }; posGap: number | null; rows: number; rowGap: number;
                 crowded: unknown[]; overflowX: number } | null, label: string, size: string) {
                 if (!table) return;
+                assert(table.posGap === null || table.posGap >= 6, `${label}: header labels touch the first player row (${table.posGap}px)`);
                 for (const stat of ['Pos', 'Age', 'GP', 'Proj', 'ADP']) assert(table.head.labels.some(text => text.startsWith(stat)),
                     `${label}: player table hides ${stat} (${table.head.labels})`);
                 assert(table.rows >= 1, `${label}: no player row fully on screen`);
@@ -479,7 +507,7 @@ async function main() {
                     await sleep(150);
                     const label = `${state.name} ${width}x${height}`;
                     const touch = form === 'phone' || width < 1220;
-                    const proof = await browser!.evaluate<Parameters<typeof assertOnePage>[0] & { tabsShown: boolean; table: Parameters<typeof assertTable>[0] }>(geometry([...common, ...state.required]));
+                    const proof = await browser!.evaluate<Parameters<typeof assertOnePage>[0] & Parameters<typeof assertThumb>[0] & { tabsShown: boolean; table: Parameters<typeof assertTable>[0] }>(geometry([...common(width), ...state.required]));
                     proofs.push({ state: state.name, form, size: [width, height], ...proof });
                     await screenshot(`onepage-${state.name}-${width}x${height}`);
                     assertOnePage(proof, label, touch);
@@ -488,24 +516,15 @@ async function main() {
                         for (const name of ['Queue', 'Teams', 'My roster', 'Results', 'Players']) {
                             await tab(name);
                             await sleep(100);
-                            const tabProof = await browser!.evaluate<Parameters<typeof assertOnePage>[0] & { table: Parameters<typeof assertTable>[0] }>(geometry([...common, ...state.required]));
+                            const tabProof = await browser!.evaluate<Parameters<typeof assertOnePage>[0] & Parameters<typeof assertThumb>[0] & { table: Parameters<typeof assertTable>[0] }>(geometry([...common(width), ...state.required]));
                             proofs.push({ state: state.name, form, size: [width, height], tab: name, ...tabProof });
                             if (name !== 'Players') await screenshot(`onepage-${state.name}-${width}x${height}-${name.replace(' ', '-').toLowerCase()}`);
                             assertOnePage(tabProof, `${label} ${name}`, touch);
                             assertTable(tabProof.table, `${label} ${name}`, `${width}x${height}`);
+                            assertThumb(tabProof, `${label} ${name}`, form === 'phone' && height > width);
                         }
                     }
-                    if (form === 'phone' && height > width && state.name !== 'responded') {
-                        const input = state.name === 'bidding' ? '[aria-label="Sealed bid amount"]' : '[aria-label="Optional nomination bid"]';
-                        const keyboard = await browser!.evaluate<{ bottom: number; limit: number; focused: boolean }>(`(() => {
-                            const e = document.querySelector('${input.replace(/"/g, '\\"')}'); e.focus();
-                            return { bottom: Math.round(e.getBoundingClientRect().bottom), limit: Math.round(innerHeight * 0.58),
-                                focused: document.activeElement === e }; })()`);
-                        proofs.push({ state: state.name, size: [width, height], keyboardEstimate: '42% of viewport height', ...keyboard });
-                        assert(keyboard.focused && keyboard.bottom <= keyboard.limit,
-                            `${label}: focused amount field ends at ${keyboard.bottom}px, under an on-screen keyboard estimate (limit ${keyboard.limit}px)`);
-                        await browser!.evaluate('(document.activeElement.blur(), true)');
-                    }
+                    if (proof.tabsShown) assertThumb(proof, label, form === 'phone' && height > width);
                 }
                 if (browser!.form) await browser!.form('phone');
             }
@@ -513,6 +532,46 @@ async function main() {
                 assert(tables.has(size), `Player columns were not measured over two or more rows at ${size}`);
             evidence.onePage = proofs;
             await writeEvidenceFile(`${root}/one-page.json`, JSON.stringify(proofs, null, 2));
+        });
+        await check('Emulated iPhone standalone 390x844: safe areas, panels between top bar and bottom card, tabs above the home indicator', async () => {
+            if (browser!.form) await browser!.form('phone');
+            await browser!.resize(390, 844);
+            const s = await client.state();
+            await backend.admin('testOnly:configure', { draft: { status: 'running', phase: 'nomination', nominatorId: 2,
+                lotId: null, order: [1,2,3,4,5,6,7,8,9,10], turnIndex: 1, tiePriority: s.draft.tiePriority,
+                turnSequence: (s.draft.turnSequence ?? 0) + 1 }, deadlineAfterMs: DAY });
+            const t = await client.state();
+            await client.act({ type: 'nominate', playerId: ranked[8].id, nominationGeneration: t.draft.nominationGeneration }, tokens[1]);
+            await client.act({ type: 'bid', lotId: (await client.state()).lot!.id, amount: 14 }, tokens[3]);
+            await until('document.querySelector(".sealed-form input")?.disabled === false');
+            // iPhone portrait insets (status bar 47px, home indicator 34px) applied through the app's own safe-area variables.
+            await browser!.evaluate(`(() => { const style = document.createElement('style'); style.id = 'standalone-insets';
+                style.textContent = ':root{--safe-top:47px;--safe-bottom:34px}'; document.head.append(style); return true; })()`);
+            await tab('Players');
+            await browser!.evaluate('([...document.querySelectorAll(".pool-row.expanded .name-button")].forEach(button => button.click()), true)');
+            const frames: unknown[] = [];
+            for (const name of ['Players', 'Queue', 'Teams', 'My roster', 'Results']) {
+                await tab(name);
+                await sleep(150);
+                const frame = await browser!.evaluate<{ viewport: number[]; document: number[]; me: number; tabs: number; tabbar: number;
+                    card: number[]; panel: number[]; scroll: number }>(`(() => {
+                    const r = e => e.getBoundingClientRect(), panel = [...document.querySelectorAll('.pool, .queue, .teams, .roster, .results')]
+                        .find(e => e.getClientRects().length);
+                    return { viewport: [innerWidth, innerHeight], document: [document.documentElement.scrollWidth, document.documentElement.scrollHeight],
+                        me: Math.round(r(document.querySelector('.me-box')).top), tabs: Math.round(Math.max(...[...document.querySelectorAll('.tabbar button')].map(e => r(e).bottom))),
+                        tabbar: Math.round(r(document.querySelector('.tabbar')).bottom), card: [Math.round(r(document.querySelector('.block')).top), Math.round(r(document.querySelector('.block')).bottom)],
+                        panel: [Math.round(r(panel).top), Math.round(r(panel).bottom)], scroll: Math.round(panel.querySelector('.scroll').clientHeight) }; })()`);
+                frames.push({ tab: name, ...frame });
+                await screenshot(`standalone-390x844-${name.replace(' ', '-').toLowerCase()}`);
+                assert(frame.document[0] <= 390 && frame.document[1] <= 844, `${name}: page overflows ${frame.document}`);
+                assert(frame.me >= 47, `${name}: identity under the status bar (${frame.me}px)`);
+                assert(frame.tabs <= 844 - 34 && frame.tabbar >= 843, `${name}: tabs ${frame.tabs}px / bar ${frame.tabbar}px vs home indicator`);
+                assert(frame.panel[1] <= frame.card[0] && frame.card[1] <= frame.tabs - 40, `${name}: order ${JSON.stringify(frame)}`);
+                assert(frame.scroll >= 100, `${name}: panel scroll area ${frame.scroll}px`);
+            }
+            evidence.standalone = { insets: { top: 47, bottom: 34 }, frames };
+            await browser!.evaluate('(document.getElementById("standalone-insets").remove(), true)');
+            await finish();
         });
         await check('Long queue: API readback matches the UI; deep reorder, amount edit and remove work; an add on your own turn nominates the first entry', async () => {
             if (browser!.form) await browser!.form('phone');

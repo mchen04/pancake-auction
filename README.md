@@ -232,8 +232,10 @@ A 256-bit device token saved by the earlier exclusive-seat build still opens its
 The room is one screen tall on desktop, tablet and phone, including the installed web app. The page itself never scrolls; only panels do.
 The top bar always shows your name, budget left and active roster count. The current-player card keeps the deadline,
 response count, and the bid, Pass and nomination controls on screen at every supported size, including short and landscape phones.
-Desktop shows the queue, players, current player, teams, results and roster together. Narrower screens use one-tap tabs:
-Players, Queue, Teams (phone), My roster and Results. The Queue tab shows how many players are queued.
+Desktop shows the queue, players, current player, teams, results and roster together. Narrower screens use one-tap tabs
+along the bottom edge: Players, Queue, Teams (phone), My roster and Results. The Queue tab shows how many players are queued.
+On phones the selected panel fills the space between the top bar and the current-player card, and the card sits just
+above the tabs, so the bid, Pass and nomination controls stay within thumb reach. The phone top bar drops the wordmark.
 Teams shows tie priority from highest to lowest.
 My roster retains 20 active, three Taxi, and two IR rows, including empty places.
 Player search, positions, projections, detailed stats, roster inspection, and placement controls remain available.
@@ -245,6 +247,20 @@ The icon (a basketball on a syrup pancake stack, on an opaque dark background) i
 for example `rsvg-convert -w 180 -h 180 public/icon.svg`, flattened to RGB.
 The layout includes safe-area padding and dynamic viewport height. Installation adds no offline bidding or background response automation.
 The `emulated-standalone` CSS class is a layout-only test hook. It changes no auction behavior.
+Safe-area insets flow through the `--safe-top`, `--safe-right`, `--safe-bottom` and `--safe-left` CSS variables,
+so layout tests can apply iPhone insets.
+
+### Updates
+
+There is no service worker: the page is rendered per request and never cached, and its scripts have content-hashed names.
+Each build carries a version, a hash of `app/`, `lib/`, `public/`, `convex/_generated/`, `next.config.ts` and
+`package-lock.json` (`PANCAKE_APP_VERSION` overrides it, for tests). `/version.json` serves the live build's version.
+When the app is opened, shown again, focused, or comes back online, it compares the two and reloads once to the new build.
+It waits while an amount is typed but not sent, a text field is focused, or a request is in flight, and applies when the
+edit ends or on the next open. A failed or offline check changes nothing. At most two reloads toward one version happen in
+ten minutes, so a stale page can never loop. The saved seat and other stored data are untouched.
+An update reaches phones only once it is deployed. A page opened before the updater shipped has no updater; it picks it up
+the next time it is fully reloaded or reopened after being closed.
 
 ## Local verification
 
@@ -272,7 +288,8 @@ Simulated clock and shortened deadline controls exist only in those copied fixtu
 | `npm run test:ui` | Chromium UI through agent-browser by default. Every browser mode also checks the one-page matrix: no page scroll, and identity, deadline, response state and actions reachable at phone, landscape, short and desktop sizes. |
 | `AUCTION_BROWSER=safari npm run test:ui` | Real Safari through a separate safaridriver automation session. |
 | `AUCTION_BROWSER=webkit npm run test:ui` | Playwright WebKit, 390×844, mobile user agent, and touch, plus a desktop WebKit context for the one-page size matrix. This is not Safari. |
-| `npm run verify` | Typecheck, lint, units, local harness, database, volume, build, layout regressions, Chromium UI, and import/error recovery, in that order. |
+| `npm run test:update` | Two production builds behind one local origin: an open iPhone-standalone WebKit client on build A loads build B on its next focus with one reload, keeps its seat, waits for a typed amount, survives failed and offline checks, and stops after two reloads toward a version that is never served. |
+| `npm run verify` | Typecheck, lint, units, local harness, database, volume, build, layout regressions, Chromium UI, trusted seats, import/error recovery, and the update check, in that order. |
 
 Use `AUCTION_NEXT_DEV=1` for bounded local Next development during Safari and WebKit checks.
 Safari verification attempts a standalone WebDriver window. If unsupported, evidence labels the separate layout check as emulated standalone.
