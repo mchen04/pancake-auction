@@ -78,7 +78,7 @@ async function main() {
             await browser('wait', '.room');
             await browser('fill', '[aria-label="Search players or team"]', 'keep this search');
             await browser('select', '[aria-label="Filter players by position"]', 'PG');
-            await browser('click', '[role="tab"]:nth-child(2)');
+            await browser('click', '.tabbar .tab-teams');
             await browser('eval', 'window.transport.holdPools = true; true');
             await seedPlayers(recorded.players.slice(0, 31) as Player[]);
             await until('window.transport.poolHeld');
@@ -95,88 +95,39 @@ async function main() {
             nominatorId: 1, nominationMs: 600000 }, deadlineAfterMs: 600000 });
         await check('Pool loading preserves the typed opening bid and same-turn controls', async () => {
             await open('healthy');
-            await browser('wait', '[aria-label="Opening bid"]');
-            await browser('fill', '[aria-label="Opening bid"]', '23');
+            await browser('wait', '[aria-label="Optional nomination bid"]');
+            await browser('fill', '[aria-label="Optional nomination bid"]', '23');
             await browser('eval', 'window.transport.holdPools = true; true');
             await currentBackend().admin('testOnly:refreshPoolRevision');
             await until('window.transport.poolHeld');
-            assert.equal(await evaluate(`document.querySelector('[aria-label="Opening bid"]')?.value ?? null`), '23');
+            assert.equal(await evaluate(`document.querySelector('[aria-label="Optional nomination bid"]')?.value ?? null`), '23');
             await browser('eval', 'window.transport.holdPools = false; true');
             await until('!window.transport.poolHeld');
-            assert.equal(await evaluate(`document.querySelector('[aria-label="Opening bid"]')?.value ?? null`), '23');
+            assert.equal(await evaluate(`document.querySelector('[aria-label="Optional nomination bid"]')?.value ?? null`), '23');
         });
         const state = await getState();
-        await act({ type: 'nominate', playerId: state.players[0].id, amount: 1 }, token);
-        const clockSample = async (selector = '.room .shot-clock .digits') => {
-            const sample = await evaluate(`(() => {
-                const displayed = document.querySelector(${JSON.stringify(selector)})?.textContent;
-                const remaining = (${(await getState()).draft.deadline} - Date.now()) / 1000;
-                return { displayed, remaining, errorSeconds: Math.abs(Number(displayed) - remaining) };
-            })()`);
-            assert(Number.isFinite(sample.errorSeconds), 'The real countdown must exist');
-            assert(sample.remaining > 0 && sample.remaining < 10, 'The deadline must test sub-second rendering');
-            return sample;
-        };
-        await check('Fresh clock negative control matches the real remaining time', async () => {
-            await configure({ deadlineAfterMs: 9000 });
-            await open('healthy');
-            await browser('wait', '.bid-controls');
-            const sample = await clockSample();
-            assert.match(sample.displayed, /^\d+\.\d$/);
-            assert(sample.errorSeconds <= 0.3);
-        });
-        await check('Stale cached query time cannot change the countdown on mount or reconnect', async () => {
-            await configure({ deadlineAfterMs: 9000 });
-            await open('stale');
-            await browser('wait', '.bid-controls');
-            await sleep(700);
-            const mounted = await clockSample();
-            assert.match(mounted.displayed, /^\d+\.\d$/);
-            assert(mounted.errorSeconds <= 0.3, 'Mount must synchronize within 0.3 seconds');
-            const calls = await evaluate('window.transport.syncCalls');
-            assert(calls >= 1);
-            const before = await getState();
-            await browser('eval', 'window.transport.sockets.at(-1).close(); true');
-            await until(`window.transport.syncCalls > ${calls}`);
-            await sleep(500);
-            const after = await getState();
-            assert.equal(after.recentEvents[0].id, before.recentEvents[0].id, 'Reconnect makes no draft write');
-            const samples = [];
-            for (let index = 0; index < 3; index++) {
-                const sample = await clockSample();
-                assert.match(sample.displayed, /^\d+\.\d$/);
-                assert(sample.errorSeconds <= 0.3, 'Reconnect must synchronize within 0.3 seconds');
-                samples.push(sample);
-                await sleep(120);
-            }
-            const cachedOffsetControl = await clockSample('.legacy-clock .digits');
-            assert(cachedOffsetControl.errorSeconds > 59, 'The cached-offset control must fail the same tolerance');
-            await writeFile(`${dir}/clock.json`, JSON.stringify({ staleQueryTime: await evaluate(
-                'window.transport.cachedTimes.at(-1)'), syncCalls: await evaluate('window.transport.syncCalls'),
-                toleranceSeconds: 0.3, mounted, reconnected: samples, cachedOffsetControl,
-                noDraftWrites: true }, null, 2));
-        });
+        await act({ type: 'nominate', playerId: state.players[0].id }, token);
         const otherToken = await claimSeat(2);
         await act({ type: 'bid', lotId: (await getState()).lot!.id, amount: 2 }, otherToken);
         await configure({ deadlineAfterMs: 120000 });
         await check('Ordinary same-lot updates preserve the custom bid (negative control)', async () => {
             await open('healthy');
             await browser('wait', '.bid-controls');
-            await browser('fill', '[aria-label="Bid amount"]', '31');
+            await browser('fill', '[aria-label="Sealed bid amount"]', '31');
             await claimSeat(3);
-            assert.equal(await evaluate(`document.querySelector('[aria-label="Bid amount"]')?.value ?? null`), '31');
+            assert.equal(await evaluate(`document.querySelector('[aria-label="Sealed bid amount"]')?.value ?? null`), '31');
         });
         await check('Same-lot pool loading preserves the custom bid', async () => {
             await open('healthy');
             await browser('wait', '.bid-controls');
-            await browser('fill', '[aria-label="Bid amount"]', '31');
+            await browser('fill', '[aria-label="Sealed bid amount"]', '31');
             await browser('eval', 'window.transport.holdPools = true; true');
             await currentBackend().admin('testOnly:refreshPoolRevision');
             await until('window.transport.poolHeld');
-            assert.equal(await evaluate(`document.querySelector('[aria-label="Bid amount"]')?.value ?? null`), '31');
+            assert.equal(await evaluate(`document.querySelector('[aria-label="Sealed bid amount"]')?.value ?? null`), '31');
             await browser('eval', 'window.transport.holdPools = false; true');
             await until('!window.transport.poolHeld');
-            assert.equal(await evaluate(`document.querySelector('[aria-label="Bid amount"]')?.value ?? null`), '31');
+            assert.equal(await evaluate(`document.querySelector('[aria-label="Sealed bid amount"]')?.value ?? null`), '31');
         });
     } finally {
         try { await browser('close'); } finally {

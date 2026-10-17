@@ -32,6 +32,8 @@ export interface Manager {
     claimed: boolean;
 }
 export interface Draft {
+    mode?: "sealed-v1";
+    tiePriority?: number[];
     status: "setup" | "running" | "paused" | "complete";
     nominationGeneration: string;
     turnSequence?: number;
@@ -58,6 +60,11 @@ export interface Lot {
     highBid: number;
     status: string;
     player?: Player;
+    eligibleIds?: number[];
+    respondedIds?: number[];
+    bids?: SealedResponse[];
+    priorityBefore?: number[];
+    tied?: boolean;
 }
 export interface RecentEvent {
     id: string;
@@ -99,7 +106,7 @@ export type Action = {
     type: "nominate";
     nominationGeneration: string;
     playerId: string;
-    amount: number;
+    amount?: number;
 } | {
     type: "bid";
     lotId: number;
@@ -108,11 +115,6 @@ export type Action = {
     type: "pass";
     lotId: number;
 } | {
-    type: "force";
-    lotId: number;
-    expectedHighBidderId: number;
-    expectedHighBid: number;
-} | {
     type: "place";
     playerId: string;
     placement: Placement;
@@ -120,3 +122,25 @@ export type Action = {
     type: "release";
     managerId: number;
 };
+
+export interface SealedResponse {
+    managerId: number;
+    amount: number;
+    automatic?: string;
+}
+export interface QueueEntry {
+    id: string;
+    playerId: string;
+    amount?: number;
+    reason?: string;
+}
+export interface PrivateState {
+    managerId: number;
+    lotId: number | null;
+    response: SealedResponse | null;
+    queue: QueueEntry[];
+}
+export type QueueAction = { type: 'add'; playerId: string; amount?: number }
+    | { type: 'remove'; id: string }
+    | { type: 'edit'; id: string; amount?: number }
+    | { type: 'reorder'; ids: string[] };

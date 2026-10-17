@@ -1,13 +1,8 @@
+import { expireDraft } from '../convex/auction';
 import { v } from 'convex/values';
-import { internalMutation, mutation } from '../convex/_generated/server';
-import { draftRecord, load, Store } from '../convex/engine';
+import { internalMutation, internalQuery } from '../convex/_generated/server';
+import { draftRecord, initialDraft, load, Store } from '../convex/engine';
 import type { Draft, Entry } from '../lib/types';
-
-export const interfereDraft = mutation({ args: {}, handler: async ctx => {
-    const row = await draftRecord(ctx);
-    if (!row) throw new Error('Initialize the contention fixture');
-    await ctx.db.patch(row._id, { version: row.version + 1 });
-} });
 
 export const queryFailure = internalMutation({ args: { enabled: v.boolean() }, handler: async (ctx, args) => {
     const rows = await ctx.db.query('drafts').withIndex('key', q => q.eq('key', 'auction')).collect();
@@ -45,6 +40,7 @@ handler: async (ctx, args) => {
         await ctx.db.patch(row!._id, change);
     }
     if (args.roster) {
+        for (const row of await ctx.db.query('responses').collect()) await ctx.db.delete(row._id);
         for (const row of await ctx.db.query('roster').collect()) await ctx.db.delete(row._id);
         for (const row of await ctx.db.query('lots').collect()) await ctx.db.delete(row._id);
         for (const entry of args.roster as Entry[]) {
@@ -66,4 +62,43 @@ handler: async (ctx, args) => {
     if (args.draft) store.renewNomination(state);
     if (args.roster) store.nextLot = Math.max(0, ...args.roster.map((entry: Entry) => entry.lotId)) + 1;
     await store.save(state);
+} });
+
+export const reset = internalMutation({ args: {}, handler: async ctx => {
+    for (const table of ['drafts', 'lots', 'roster', 'responses', 'queues', 'passes', 'events'] as const)
+        for (const row of await ctx.db.query(table).collect()) await ctx.db.delete(row._id);
+    for (const manager of await ctx.db.query('managers').collect())
+        await ctx.db.patch(manager._id, { budget: 1000, done: false });
+    await ctx.db.insert('drafts', { key: 'auction', value: initialDraft(), version: 0, nextLot: 1, nextEvent: 1 });
+} });
+export const deadlineSnapshot = internalQuery({ args: {}, handler: async ctx => {
+    const record = (await draftRecord(ctx))!;
+    return { draftId: record._id, lotId: record.value.lotId, version: record.version, deadline: record.value.deadline };
+} });
+export const simulatedExpiry = internalMutation({ args: { snapshot: v.object({ draftId: v.id('drafts'),
+    lotId: v.union(v.number(), v.null()), version: v.number(), deadline: v.number() }), now: v.number() },
+handler: async (ctx, args) => {
+    await expireDraft(ctx, args.snapshot, args.now);
+} });
+export const legacy = internalMutation({ args: { running: v.boolean() }, handler: async (ctx, args) => {
+    const record = (await draftRecord(ctx))!;
+    const value = { ...record.value };
+    delete value.mode;
+    delete value.tiePriority;
+    value.nominationMs = 10000;
+    value.biddingMs = 10000;
+    value.extensionMs = 5000;
+    value.capMs = 15000;
+    if (args.running) {
+        const player = (await ctx.db.query('pools').unique())!.players[0];
+        value.status = 'running';
+        value.phase = 'bidding';
+        value.lotId = 1;
+        value.deadline = Date.now() - 1;
+        await ctx.db.insert('lots', { id: 1, playerId: player.id, nominatorId: 1,
+            highBidderId: 1, highBid: 73, status: 'open', player });
+        await ctx.db.insert('passes', { lotId: 1, managerId: 2 });
+        await ctx.db.insert('events', { id: 1, type: 'bid', managerId: 1, lotId: 1, data: { amount: 73 }, at: Date.now() });
+    }
+    await ctx.db.patch(record._id, { value });
 } });

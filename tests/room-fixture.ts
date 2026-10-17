@@ -15,11 +15,11 @@ export function roomFixture(): AuctionState {
         managers: managers.map((manager, index) => ({
             ...manager, id: index + 1, budget: 1000, done: false, claimed: true
         })),
-        lot: { id: 101, playerId: players[0].id, nominatorId: 2, highBidderId: 2, highBid: 1, status: 'open' },
+        lot: { id: 101, playerId: players[0].id, nominatorId: 2, highBidderId: 0, highBid: 0, status: 'open', respondedIds: [], eligibleIds: [1,2,3,4,5,6,7,8,9,10] },
         draft: {
-            status: 'running', nominationGeneration: 'fixture:1', phase: 'bidding', order: managers.map((_, index) => index + 1), turnIndex: 1,
+            mode: 'sealed-v1', tiePriority: [10,9,8,7,6,5,4,3,2,1], status: 'running', nominationGeneration: 'fixture:1', phase: 'bidding', order: managers.map((_, index) => index + 1), turnIndex: 1,
             nominatorId: 2, lotId: 101, deadline: Date.now() + 600000, remainingMs: null,
-            nominationMs: 10000, biddingMs: 10000, extensionMs: 5000, capMs: 15000,
+            nominationMs: 86400000, biddingMs: 86400000, extensionMs: 0, capMs: 86400000,
             passedTurns: [], completionReason: null
         }
     };

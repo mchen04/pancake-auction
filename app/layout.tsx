@@ -9,9 +9,12 @@ const body = IBM_Plex_Sans({ subsets: ['latin'], weight: ['400', '500', '600'], 
 
 export const metadata: Metadata = {
   title: 'Pancake Auction',
-  description: 'Live startup auction room for the Pancake dynasty league'
+  description: 'Sealed-bid auction room for the Pancake dynasty league',
+  appleWebApp: { capable: true, title: 'Pancake Auction', statusBarStyle: 'default' },
+  icons: { apple: '/apple-touch-icon.png' },
+  other: { 'apple-mobile-web-app-capable': 'yes' }
 };
-export const viewport: Viewport = { width: 'device-width', initialScale: 1, themeColor: '#e8ecf1' };
+export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover', themeColor: '#e8ecf1' };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   await connection();

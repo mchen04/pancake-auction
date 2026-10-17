@@ -12,7 +12,6 @@ export function canNominate(state: AuctionState, manager: Manager | undefined): 
 export function timeoutNominee(state: AuctionState, manager: Manager | undefined): Player | undefined {
     if (!manager || manager.done) return undefined;
     const entries = state.roster.filter(entry => entry.managerId === manager.id);
-    if (counts(entries).active >= 20) return undefined;
     const sold = new Set(state.roster.map(entry => entry.playerId));
     return state.players.filter(player => !sold.has(player.id)).sort((a, b) =>
         (b.projection ?? -Infinity) - (a.projection ?? -Infinity) || a.id.localeCompare(b.id))
@@ -105,9 +104,6 @@ export function placementMax(budget: number, entries: Entry[], placement: Placem
 }
 export function maxBid(budget: number, player: Player, entries: Entry[], players: Player[]): number {
     return Math.max(0, ...legalPlacements(player, entries, players).map(p => placementMax(budget, entries, p)));
-}
-export function nextDeadline(deadline: number, now: number, extensionMs: number, capMs: number): number {
-    return Math.min(deadline + extensionMs, now + capMs);
 }
 export function fantasyPoints(stats: Record<string, number>): number {
     const weights: Record<string, number> = {

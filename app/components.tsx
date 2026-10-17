@@ -1,10 +1,11 @@
 'use client';
-import { estimatedServerTime, type ClockAnchor } from '../lib/clock-samples';
+import { useQuery } from 'convex/react';
+import { api } from '../convex/_generated/api';
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import {
   canNominate, counts, legalPlacements, matching, maxBid, rankedDynastyAdp, slots, taxiEligibility, timeoutNominee
 } from '../lib/rules';
-import type { Action, AuctionState, Draft, Entry, Manager, Placement, Player, RecentEvent } from '../lib/types';
+import type { Action, AuctionState, Draft, Entry, Manager, Placement, Player, PrivateState, QueueAction, QueueEntry, RecentEvent } from '../lib/types';
 
 export const dollars = (amount: number) => `$${amount}`;
 export interface RoomProps {
@@ -13,6 +14,8 @@ export interface RoomProps {
   busy: boolean;
   connected: boolean;
   send: (action: Action) => Promise<void>;
+  privateSeat?: PrivateState | null;
+  editQueue?: (action: QueueAction) => Promise<void>;
 }
 
 const placementLabels: Record<Placement, string> = { active: 'Active', taxi: 'Taxi', ir: 'IR' };
@@ -32,9 +35,8 @@ function nameOf(state: AuctionState, managerId: number | null | undefined) {
   return state.managers.find(manager => manager.id === managerId)?.name ?? 'Unknown';
 }
 function timeoutText(state: AuctionState, manager: Manager | undefined) {
-  if (manager && onlyReserveOpen(entriesOf(state, manager.id))) return 'Time out: the turn passes.';
   const pick = timeoutNominee(state, manager);
-  return pick ? `Time out: ${pick.name} opens at $1.` : 'Time out: the turn passes.';
+  return pick ? `After 24h: ${pick.name} is nominated without a bid.` : 'Time out: the turn passes.';
 }
 function upcomingNominators(state: AuctionState) {
   const { order, turnIndex } = state.draft;
@@ -148,43 +150,31 @@ export function PlayerLine({ player }: { player: Player }) {
   );
 }
 
-function remainingMs(draft: Draft, clock: number, clockSample: ClockAnchor | null) {
-  if (draft.status === 'paused') return draft.remainingMs ?? 0;
-  if (draft.status !== 'running' || draft.deadline === null || clockSample === null) return null;
-  return Math.max(0, draft.deadline - estimatedServerTime(clockSample, clock));
-}
-export function ShotClock({ draft, clockSample, compact = false }: {
-  draft: Draft; clockSample: ClockAnchor | null; compact?: boolean
-}) {
-  const [clock, setClock] = useState(0);
+export function Deadline({ draft }: { draft: Draft }) {
+  const [now, setNow] = useState<number | null>(null);
   useEffect(() => {
-    setClock(performance.now());
-    const tick = setInterval(() => setClock(performance.now()), 100);
-    return () => clearInterval(tick);
-  }, []);
-  const remaining = remainingMs(draft, clock, clockSample);
-  const total = draft.phase === 'bidding' ? draft.capMs : draft.nominationMs;
-  const urgent = remaining !== null && remaining < 4000 && draft.status === 'running';
-  const digits = remaining === null ? '--' : remaining >= 10000
-    ? String(Math.ceil(remaining / 1000)) : (remaining / 1000).toFixed(1);
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(timer);
+  }, [draft.deadline, draft.status, draft.remainingMs]);
   if (draft.status === 'setup' || draft.status === 'complete') return null;
-  const caption = draft.status === 'paused' ? 'Paused' : draft.phase === 'bidding' ? 'Bid clock' : 'Nomination';
-  return (
-    <div className={['shot-clock', compact ? 'compact' : '', urgent ? 'urgent' : '',
-      draft.status === 'paused' ? 'frozen' : ''].join(' ')}
-      role="timer" aria-label={`${caption}: ${digits} seconds`}>
-      <span className="digits">{digits}</span>
-      <span className="caption">{caption}</span>
-      <span className="drain" style={{ width: `${remaining === null ? 0 : Math.min(100, remaining / total * 100)}%` }} />
-    </div>
-  );
+  const remaining = draft.status === 'paused' ? draft.remainingMs
+    : now === null || draft.deadline === null ? null : Math.max(0, draft.deadline - now);
+  const minutes = remaining === null ? null : Math.ceil(remaining / 60000);
+  const label = minutes === null ? 'Loading deadline' : minutes === 0 ? 'Resolving…'
+    : `${Math.floor(minutes / 60)}h ${minutes % 60}m left`;
+  return <div className="deadline" role="timer">
+    <strong>{draft.status === 'paused' ? 'Paused · ' : ''}{label}</strong>
+    {draft.deadline && <time dateTime={new Date(draft.deadline).toISOString()}>
+      {now === null ? '' : new Date(draft.deadline).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+    </time>}
+  </div>;
 }
-
-function nominationBlocker(props: RoomProps, player: Player, opening: number) {
-  const { state, me } = props;
-  const maximum = maxBid(me.budget, player, entriesOf(state, me.id), state.players);
+function nominationBlocker(props: RoomProps, player: Player, opening: number | undefined) {
+  const maximum = maxBid(props.me.budget, player, entriesOf(props.state, props.me.id), props.state.players);
   if (maximum < 1) return 'No spot';
-  if (opening > maximum) return `Max ${dollars(maximum)}`;
+  if (opening !== undefined && (!Number.isSafeInteger(opening) || opening < 1)) return 'Use a positive whole dollar';
+  if (opening !== undefined && opening > maximum) return `Max ${dollars(maximum)}`;
   return '';
 }
 function myNominationTurn(state: AuctionState, me: Manager) {
@@ -192,10 +182,9 @@ function myNominationTurn(state: AuctionState, me: Manager) {
   return d.status === 'running' && d.phase === 'nomination' && d.nominatorId === me.id;
 }
 
-export function PoolPanel(props: RoomProps & { opening: number }) {
+export function PoolPanel(props: RoomProps & { opening: number | undefined }) {
   const { state, me, send } = props;
-  const cap = Math.max(1, me.budget - Math.max(0, 19 - counts(entriesOf(state, me.id)).active));
-  const opening = Math.max(1, Math.min(cap, props.opening));
+  const opening = props.opening;
   const [search, setSearch] = useState('');
   const [position, setPosition] = useState('');
   const [sort, setSort] = useState('projection');
@@ -214,6 +203,7 @@ export function PoolPanel(props: RoomProps & { opening: number }) {
     return (b.projection ?? -Infinity) - (a.projection ?? -Infinity);
   });
   const nominating = myNominationTurn(state, me);
+  const actions = state.draft.status !== 'complete';
   const lotPlayer = state.lot?.playerId;
   return (
     <section className="panel pool" aria-label="Players">
@@ -236,7 +226,7 @@ export function PoolPanel(props: RoomProps & { opening: number }) {
           ))}
         </div>
       </div>
-      <div className={`scroll ${nominating ? 'nominating' : ''}`}>
+      <div className={`scroll ${actions ? 'with-action' : ''} ${nominating ? 'nominating' : ''}`}>
         <div className="table-head pool-grid">
           <span>Player</span><span>Pos</span>
           <button className={sort === 'age' ? 'sorted' : ''} onClick={() => setSort('age')}>Age</button>
@@ -245,7 +235,7 @@ export function PoolPanel(props: RoomProps & { opening: number }) {
             title="Projected fantasy points per game">Proj</button>
           <button className={sort === 'adp' ? 'sorted' : ''} onClick={() => setSort('adp')}
             title="Sleeper dynasty ADP">ADP</button>
-          {nominating && <span />}
+          {actions && <span className="sr-only">Action</span>}
         </div>
         {pool.slice(0, limit).map(player => {
           const blocker = nominating ? nominationBlocker(props, player, opening) : '';
@@ -270,13 +260,14 @@ export function PoolPanel(props: RoomProps & { opening: number }) {
                 <Cell value={projectionLabel(player)} className="strong"
                   unknown={player.projection === null ? 'No Sleeper projection' : null} />
                 <DynastyAdp value={player.adp} />
+                {actions && !nominating && <span><QuickQueue {...props} player={player} /></span>}
                 {nominating && (
                   <span>
                     {blocker ? <small className="blocked">{blocker}</small> : (
-                    <button className="nominate" disabled={props.busy || !props.connected} title={`Nominate at ${dollars(opening)}`}
+                    <button className="nominate" disabled={props.busy || !props.connected} title={opening === undefined ? 'Nominate without a bid' : `Nominate with sealed bid ${dollars(opening)}`}
                       onClick={event => {
                         event.stopPropagation();
-                        void send({ type: 'nominate', playerId: player.id, amount: opening,
+                        void send({ type: 'nominate', playerId: player.id, ...(opening === undefined ? {} : { amount: opening }),
                           nominationGeneration: state.draft.nominationGeneration });
                       }}>
                       Nominate
@@ -285,7 +276,7 @@ export function PoolPanel(props: RoomProps & { opening: number }) {
                   </span>
                 )}
               </div>
-              {expanded && <PlayerDetails player={player} />}
+              {expanded && <><PlayerDetails player={player} /><QueueAdd {...props} player={player} /></>}
             </Fragment>
           );
         })}
@@ -298,122 +289,88 @@ export function PoolPanel(props: RoomProps & { opening: number }) {
   );
 }
 
-function bidBlocker(props: RoomProps, maximum: number, passed: boolean) {
-  const { state, me, busy, connected } = props;
-  const lot = state.lot;
-  if (!lot) return 'No player on the block';
-  if (state.draft.status === 'paused') return 'Draft paused';
-  if (state.draft.status !== 'running') return 'Draft is not live';
-  if (!connected) return 'Reconnecting';
-  if (busy) return 'Sending';
-  if (lot.highBidderId === me.id) return 'You have the high bid';
-  if (passed) return 'You gave up on this player';
-  if (maximum <= lot.highBid) return maximum < 1 ? 'No open spot fits this player' : `Your max is ${dollars(maximum)}`;
-  return '';
+function Lock() {
+  return <svg className="lock" width="11" height="12" viewBox="0 0 11 12" aria-hidden="true" focusable="false">
+    <rect x="1" y="5" width="9" height="6.5" rx="1.2" fill="currentColor" />
+    <path d="M3 5V3.6a2.5 2.5 0 0 1 5 0V5" fill="none" stroke="currentColor" strokeWidth="1.4" />
+  </svg>;
 }
-
-function BidControls(props: RoomProps & { player: Player | undefined; clockSample: ClockAnchor | null }) {
-  const { state, me, send, player } = props;
+function ResponseStrip({ state }: { state: AuctionState }) {
+  const lot = state.lot!;
+  const responded = lot.respondedIds ?? [];
+  return <div className="responses">
+    <p className="response-count">{responded.length} of {state.managers.length} responded</p>
+    <ul className="response-dots" aria-label="Response status">
+      {state.managers.map(manager => {
+        const done = responded.includes(manager.id);
+        return <li key={manager.id} className={done ? 'on' : ''} title={`${manager.name}: ${done ? 'Responded' : 'Waiting'}`}>
+          <span className="sr-only">{manager.name}: {done ? 'Responded' : 'Waiting'}</span>
+        </li>;
+      })}
+    </ul>
+  </div>;
+}
+function BidControls(props: RoomProps & { player: Player | undefined }) {
+  const { state, me, send, player, privateSeat } = props;
   const lot = state.lot!;
   const [custom, setCustom] = useState('');
   const maximum = player ? maxBid(me.budget, player, entriesOf(state, me.id), state.players) : 0;
-  const passed = state.passes.includes(me.id);
-  const blocker = player ? bidBlocker(props, maximum, passed) : 'Player data is loading';
-  const customAmount = Number(custom);
-  const customValid = Number.isInteger(customAmount) && customAmount > lot.highBid && customAmount <= maximum;
-  const bid = (amount: number) => void send({ type: 'bid', lotId: lot.id, amount });
-  const canGiveUp = !passed && lot.highBidderId !== me.id && state.draft.status === 'running' && !props.busy;
-  return (
-    <div className="bid-controls">
-      <p className="pinned-lead">
-        <strong>{dollars(lot.highBid)}</strong>
-        <span>{lot.highBidderId === me.id ? 'You lead' : `${nameOf(state, lot.highBidderId)} leads`}</span>
-        <small>Nominated by {nameOf(state, lot.nominatorId)}</small>
-        <ShotClock draft={state.draft} clockSample={props.clockSample} compact />
-      </p>
-      <div className="bid-buttons">
-        {[1, 5].map(step => (
-          <button key={step} className="primary" disabled={!!blocker || lot.highBid + step > maximum}
-            title={blocker} onClick={() => bid(lot.highBid + step)}>
-            <span className="step">+{step}</span><span>{dollars(lot.highBid + step)}</span>
-          </button>
-        ))}
-        <form className="custom" onSubmit={event => {
+  const ready = privateSeat?.lotId === lot.id;
+  const own = ready ? privateSeat.response : null;
+  const blocked = !ready || !props.connected || props.busy || state.draft.status !== 'running'
+    || !!own || maximum < 1;
+  const amount = Number(custom);
+  const valid = custom.trim() !== '' && Number.isSafeInteger(amount) && amount >= 1 && amount <= maximum;
+  const waiting = state.managers.length - (lot.respondedIds?.length ?? 0);
+  return <div className="bid-controls">
+    <ResponseStrip state={state} />
+    {own ? <div className="own-response" role="status">
+      <p><span className="check" aria-hidden="true">✓</span> Your final response: <strong>{own.amount === 0 ? 'Pass ($0)' : dollars(own.amount)}</strong>
+        {own.automatic ? ' · Automatic pass' : ''}</p>
+      <small>Sealed until the lot resolves{waiting > 0 ? ` · waiting on ${waiting} more` : ''}.</small>
+    </div>
+      : <>
+        <form className="sealed-form" onSubmit={event => {
           event.preventDefault();
-          if (!blocker && customValid) {
-            bid(customAmount);
-            setCustom('');
-          }
+          if (!blocked && valid) void send({ type: 'bid', lotId: lot.id, amount });
         }}>
-          <input aria-label="Bid amount" inputMode="numeric" placeholder="Amount"
-            value={custom} onChange={event => setCustom(event.target.value.replace(/\D/g, ''))} disabled={!!blocker} />
-          <button className="primary" disabled={!!blocker || !customValid}>Bid</button>
+          <label className="money">
+            <span aria-hidden="true">$</span>
+            <input aria-label="Sealed bid amount" inputMode="numeric" pattern="[0-9]*" enterKeyHint="send" autoComplete="off"
+              placeholder={maximum >= 1 ? `1–${maximum}` : 'Whole dollars'} value={custom}
+              onChange={event => setCustom(event.target.value)} disabled={blocked} />
+          </label>
+          <button className="primary" disabled={blocked || !valid}>
+            {valid ? `Submit ${dollars(amount)} final` : 'Submit final bid'}</button>
+          <button type="button" className="pass" disabled={blocked}
+            onClick={() => void send({ type: 'pass', lotId: lot.id })}>Pass ($0)</button>
         </form>
-      </div>
-      <div className="bid-footer">
-        <button className="ghost small" disabled={!canGiveUp} onClick={() => void send({ type: 'pass', lotId: lot.id })}>
-          {passed ? 'Gave up' : 'Give up'}
-        </button>
-        <p className="bid-note">
-          {lot.highBidderId === me.id ? `Your max is ${dollars(maximum)}.` : blocker || (custom && customAmount <= lot.highBid ? (
-            <>
-              Must beat {dollars(lot.highBid)}.{' '}
-              <button className="link" onClick={() => setCustom(String(lot.highBid + 1))}>Use {dollars(lot.highBid + 1)}</button>
-            </>
-          ) : custom && customAmount > maximum ? (
-            <>
-              Your max is {dollars(maximum)}.{' '}
-              <button className="link" onClick={() => setCustom(String(maximum))}>Use max</button>
-            </>
-          ) : (
-            <>
-              You can bid up to {dollars(maximum)}.{' '}
-              <button className="link" onClick={() => setCustom(String(maximum))}>Use max</button>
-            </>
-          ))}
-        </p>
-      </div>
-    </div>
-  );
+        <p className="bid-note">{!ready ? 'Loading your response…'
+          : maximum < 1 ? 'No legal roster spot or budget for this player, so you pass automatically.'
+            : state.draft.status === 'paused' ? 'Paused. You can respond when the draft resumes.'
+              : custom.trim() !== '' && !valid ? `Use a whole dollar from $1 to ${dollars(maximum)}.`
+                : <>Max {dollars(maximum)}. <strong>One final response</strong>, hidden until the lot resolves.</>}</p>
+      </>}
+  </div>;
 }
-
-function OpeningBid({ opening, setOpening, cap, turn, submission }: {
-  opening: number; setOpening: (value: number) => void; cap: number; turn: number; submission: number
+function OpeningBid({ opening, setOpening }: {
+  opening: number | undefined; setOpening: (value: number | undefined) => void
 }) {
-  const [edit, setEdit] = useState({ text: String(opening), focused: false, amount: opening, turn, submission });
-  if (turn !== edit.turn || submission !== edit.submission || (!edit.focused && opening !== edit.amount)) {
-    setEdit({ text: String(opening), focused: edit.focused, amount: opening, turn, submission });
-  }
-  function commit() {
-    const amount = Math.max(1, Math.min(cap, Number(edit.text) || 1));
-    setOpening(amount);
-    setEdit({ text: String(amount), focused: false, amount, turn, submission });
-  }
-  return (
-    <div className="opening">
-      <span>Open at</span>
-      <button className="secondary" aria-label="Lower opening bid" disabled={opening <= 1}
-        onClick={() => setOpening(Math.max(1, opening - 1))}>−</button>
-      <input aria-label="Opening bid" inputMode="numeric" value={edit.text}
-        onFocus={event => { setEdit(value => ({ ...value, focused: true })); event.target.select(); }}
-        onBlur={commit}
-        onChange={event => {
-          const text = event.target.value.replace(/\D/g, '');
-          setEdit({ text, focused: true, amount: Number(text) || 1, turn, submission });
-          setOpening(Number(text) || 1);
-        }} />
-      <button className="secondary" aria-label="Raise opening bid" disabled={opening >= cap}
-        onClick={() => setOpening(Math.min(cap, opening + 1))}>+</button>
-    </div>
-  );
+  return <div className="opening">
+    <label className="money">
+      <span aria-hidden="true">$</span>
+      <input aria-label="Optional nomination bid" inputMode="numeric" pattern="[0-9]*" autoComplete="off" placeholder="No bid"
+        value={opening ?? ''}
+        onChange={event => setOpening(event.target.value === '' ? undefined : Number(event.target.value))} />
+    </label>
+    <span>Optional sealed bid. Leave blank to bid later like everyone else.</span>
+  </div>;
 }
-
 function NominationView(props: RoomProps & {
-  opening: number; setOpening: (value: number) => void; openingSubmission?: number
+  opening: number | undefined; setOpening: (value: number | undefined) => void
 }) {
-  const { state, me, busy, send, opening, setOpening } = props;
+  const { state, me, busy, send } = props;
   const d = state.draft;
-  const myEntries = entriesOf(state, me.id);
   if (d.status === 'setup') {
     return (
       <div className="nomination">
@@ -427,28 +384,35 @@ function NominationView(props: RoomProps & {
     );
   }
   if (d.status === 'complete') {
+    const c = counts(entriesOf(state, me.id));
     return (
-      <div className="nomination">
-        <h2>Draft complete</h2>
-        <p>{d.completionReason === 'full-cycle-passed'
-          ? 'Every manager who could still nominate passed a full round.' : 'No manager can add another player.'}</p>
+      <div className="nomination complete">
+        <h2><span className="check" aria-hidden="true">✓</span> Draft complete</h2>
+        <p>{d.completionReason === 'full-cycle-unsold'
+          ? 'Completed under earlier auction rules.' : 'No manager can nominate another player.'}</p>
+        <p>Your team: {c.active}/20 active, {c.taxi}/3 taxi, {c.ir}/2 IR, {dollars(me.budget)} left. Every revealed bid is in Results.</p>
       </div>
     );
   }
   const mine = d.nominatorId === me.id;
-  const cap = Math.max(1, me.budget - Math.max(0, 19 - counts(myEntries).active));
   return (
     <div className="nomination">
       <h2>{mine ? 'Your nomination' : `${nameOf(state, d.nominatorId)} is nominating`}</h2>
-      {mine ? (
-        <>
-          {d.status !== 'paused' && <p>{timeoutText(state, me)}</p>}
-          <OpeningBid opening={opening} setOpening={setOpening} cap={cap} turn={d.turnSequence ?? 0}
-            submission={props.openingSubmission ?? 0} />
-        </>
-      ) : d.status !== 'paused' && (
-        <p>{timeoutText(state, state.managers.find(manager => manager.id === d.nominatorId))}</p>
+      {d.status !== 'paused' && (
+        <p>{timeoutText(state, mine ? me : state.managers.find(manager => manager.id === d.nominatorId))}</p>
       )}
+    </div>
+  );
+}
+function NominationControls({ state, me, opening, setOpening }: RoomProps & {
+  opening: number | undefined; setOpening: (value: number | undefined) => void
+}) {
+  const d = state.draft;
+  if (state.lot || d.nominatorId !== me.id || (d.status !== 'running' && d.status !== 'paused')) return null;
+  return (
+    <div className="nomination-controls">
+      <OpeningBid opening={opening} setOpening={setOpening} />
+      <p className="nominate-hint">Then tap <strong>Nominate</strong> on a player in the list.</p>
     </div>
   );
 }
@@ -485,10 +449,20 @@ function LastWin(props: RoomProps) {
   );
 }
 
+function LastResult({ state }: RoomProps) {
+  const lot = state.sales[0];
+  if (!lot || state.draft.status === 'setup') return null;
+  const name = findPlayer(state, lot.playerId)?.name ?? lot.playerId;
+  const text = lot.status === 'unsold' ? `${name} went unsold and is back in the pool.`
+    : lot.status === 'undone' ? `The ${name} sale was undone.`
+      : `${nameOf(state, lot.highBidderId)} won ${name} for ${dollars(lot.highBid)}${lot.tied ? ' on tie priority' : ''}.`;
+  return <p className="last-result" role="status"><span>Last lot</span> {text}</p>;
+}
+
 export function BlockPanel(props: RoomProps & {
-  clockSample: ClockAnchor | null; opening: number; setOpening: (value: number) => void; openingSubmission?: number
+  opening: number | undefined; setOpening: (value: number | undefined) => void
 }) {
-  const { state, clockSample } = props;
+  const { state } = props;
   const [detailsFor, setDetailsFor] = useState<number | null>(null);
   const lot = state.lot;
   const showDetails = lot !== null && detailsFor === lot.id;
@@ -508,32 +482,25 @@ export function BlockPanel(props: RoomProps & {
                   </button>
                 </div>
                 {player ? <PlayerLine player={player} /> : <p className="muted">Player data is loading</p>}
-                <div className="high-bid">
-                  <strong>{dollars(lot.highBid)}</strong>
-                  <span>{lot.highBidderId === props.me.id ? 'You lead' : `${nameOf(state, lot.highBidderId)} leads`}</span>
-                  <small>Nominated by {nameOf(state, lot.nominatorId)}</small>
-                </div>
+                <p className="lot-status"><Lock /> Sealed bids · nominated by {nameOf(state, lot.nominatorId)}</p>
               </>
             ) : <NominationView {...props} />}
           </div>
-          <ShotClock draft={state.draft} clockSample={clockSample} />
+          <Deadline draft={state.draft} />
         </div>
         {lot && player && showDetails && <PlayerDetails player={player} />}
       </div>
       {lot && <BidControls key={lot.id} {...props} player={player} />}
+      <NominationControls {...props} />
       <LastWin {...props} />
+      <LastResult {...props} />
     </section>
   );
 }
 
-function teamStatus(state: AuctionState, manager: Manager, maximum: number) {
-  const lot = state.lot;
-  if (lot?.highBidderId === manager.id) return { text: `Leads ${dollars(lot.highBid)}`, tone: 'lead' };
-  if (lot && state.passes.includes(manager.id)) return { text: 'Gave up', tone: 'muted' };
-  if (lot && maximum <= lot.highBid) return { text: 'Can’t raise', tone: 'muted' };
-  if (!lot && state.draft.nominatorId === manager.id && state.draft.status !== 'complete') {
-    return { text: 'Nominating', tone: 'turn' };
-  }
+function teamStatus(state: AuctionState, manager: Manager) {
+  if (state.lot) return { text: state.lot.respondedIds?.includes(manager.id) ? 'Responded' : 'Waiting', tone: 'muted' };
+  if (state.draft.nominatorId === manager.id && state.draft.status !== 'complete') return { text: 'Nominating', tone: 'turn' };
   if (manager.done) return { text: 'Not nominating', tone: 'muted' };
   if (!manager.claimed && state.draft.status !== 'complete') return { text: 'Not joined', tone: 'muted' };
   return { text: '', tone: '' };
@@ -549,6 +516,9 @@ export function TeamsPanel(props: RoomProps) {
   return (
     <section className="panel teams" aria-label="Teams">
       <div className="scroll">
+        <div className="priority" aria-label="Tie priority"><strong>Tie priority · highest first</strong>
+          <p>{state.draft.tiePriority?.map(id => nameOf(state, id)).join(' → ') || 'Set when the draft starts'}</p>
+        </div>
         <div className={`table-head team-grid ${seatsEditable ? 'with-admin' : ''} ${live ? 'with-turn' : ''}`}>
           <span>Team</span><span>Left</span><span title={current ? `Max bid on ${current.name}` : 'Max bid'}>Max</span>
           <span>Active</span><span>Taxi</span><span>IR</span>
@@ -560,7 +530,7 @@ export function TeamsPanel(props: RoomProps) {
           const c = counts(entries);
           const maximum = current ? maxBid(manager.budget, current, entries, state.players)
             : Math.max(0, manager.budget - Math.max(0, 19 - c.active));
-          const status = teamStatus(state, manager, maximum);
+          const status = teamStatus(state, manager);
           const turnLabel = !live ? '' : manager.id === state.draft.nominatorId ? 'Now'
             : upcoming.includes(manager.id) ? String(upcoming.indexOf(manager.id) + 1) : '—';
           const turn = !state.lot && state.draft.nominatorId === manager.id && state.draft.status !== 'complete';
@@ -635,10 +605,10 @@ function moveBlocker(props: RoomProps, entry: Entry, placement: Placement) {
   }
   const changed = [...rest, { ...entry, placement }];
   if (me.budget < 20 - counts(changed).active) return 'Keep $1 for each open active spot';
-  if (state.lot?.highBidderId === me.id) {
+  const own = props.privateSeat?.lotId === state.lot?.id ? props.privateSeat?.response : null;
+  if (state.lot && own && own.amount > 0) {
     const standing = findPlayer(state, state.lot.playerId);
-    if (!standing) return 'Current player data is loading';
-    if (maxBid(me.budget, standing, changed, state.players) < state.lot.highBid) return 'Would break your high bid';
+    if (!standing || maxBid(me.budget, standing, changed, state.players) < own.amount) return 'Would break your sealed response';
   }
   return '';
 }
@@ -777,17 +747,14 @@ function eventText(event: RecentEvent, state: AuctionState) {
   const name = nameOf(state, event.managerId);
   const player = findPlayer(state, String(event.data.playerId ?? ''))?.name;
   switch (event.type) {
-    case 'nomination': return `${name} nominated ${player ?? 'a player'}${event.data.auto ? ' (time ran out)' : ''}`;
-    case 'nomination-pass': return `${name} passed (time ran out)`;
-    case 'bid': return `${name} bid ${dollars(Number(event.data.amount))}`;
-    case 'pass': return `${name} gave up`;
+    case 'nomination': return `${name} nominated ${player ?? 'a player'}${event.data.source === 'timeout' ? ' (time ran out)' : ''}`;
+    case 'resolution': return event.data.status === 'unsold' ? `${player ?? 'Player'} went unsold` : `${name} won ${player ?? 'a player'} for ${dollars(Number(event.data.price))}`;
     case 'sale': return `${name} won ${player ?? 'a player'} for ${dollars(Number(event.data.price))}`;
     case 'placement': return `${name} moved ${player ?? 'a player'} to ${placementLabels[event.data.to as Placement] ?? event.data.to}`;
     case 'done': return `${name} ${event.data.done ? 'is skipping nominations' : 'resumed nominations'}`;
     case 'undo': return 'Commissioner undid the last sale';
     case 'pause': return 'Commissioner paused the draft';
     case 'resume': return 'Commissioner resumed the draft';
-    case 'force': return 'Commissioner ended bidding';
     case 'start': return 'Draft started';
     case 'release': return 'Commissioner released a seat';
     case 'complete': return 'Draft complete';
@@ -797,6 +764,8 @@ function eventText(event: RecentEvent, state: AuctionState) {
 
 export function ResultsPanel({ state }: RoomProps) {
   const [view, setView] = useState<'sales' | 'activity'>('sales');
+  const [historyId, setHistoryId] = useState<number | null>(null);
+  const historical = useQuery(api.auction.result, historyId === null ? 'skip' : { lotId: historyId });
   const sales = [...state.roster].sort((a, b) => b.lotId - a.lotId);
   const activity = state.recentEvents
     .map(event => ({ event, text: eventText(event, state) }))
@@ -812,12 +781,23 @@ export function ResultsPanel({ state }: RoomProps) {
         </div>
       </div>
       <div className="scroll">
-        {view === 'sales' ? sales.map(entry => (
-          <div className="result-row" key={entry.lotId}>
-            <strong>{findPlayer(state, entry.playerId)?.name ?? entry.playerId}</strong>
+        {view === 'sales' && state.sales.map(lot => <details className="revealed-lot" key={lot.id}>
+          <summary>{findPlayer(state, lot.playerId)?.name ?? lot.playerId} · {lot.status === 'unsold' ? 'Unsold'
+            : lot.status === 'undone' ? 'Undone' : `${nameOf(state, lot.highBidderId)} won for ${dollars(lot.highBid)}`}</summary>
+          <p>{lot.tied ? 'Tie priority decided this lot.' : ''}</p>
+          {lot.bids?.map(bid => <p key={bid.managerId}>{nameOf(state, bid.managerId)}: {bid.amount === 0 ? 'Pass ($0)' : dollars(bid.amount)}{bid.automatic ? ` · ${bid.automatic}` : ''}</p>)}
+        </details>)}
+        {view === 'sales' ? sales.filter(entry => !state.sales.some(lot => lot.id === entry.lotId)).map(entry => (
+          <Fragment key={entry.lotId}><div className="result-row">
+            <button className="link" aria-expanded={historyId === entry.lotId}
+              onClick={() => setHistoryId(historyId === entry.lotId ? null : entry.lotId)}>
+              {findPlayer(state, entry.playerId)?.name ?? entry.playerId}</button>
             <span>{nameOf(state, entry.managerId)}</span>
             <b>{dollars(entry.price)}</b>
           </div>
+          {historyId === entry.lotId && <div className="revealed-lot">
+            {historical?.bids?.map(bid => <p key={bid.managerId}>{nameOf(state, bid.managerId)}: {bid.amount === 0 ? 'Pass ($0)' : dollars(bid.amount)}</p>)}
+          </div>}</Fragment>
         )) : activity.map(({ event, text }) => (
           <div className="activity-row" key={event.id}>{text}</div>
         ))}
@@ -845,7 +825,7 @@ function ConfirmButton({ label, confirmLabel, disabled, className, onConfirm, ti
   );
 }
 function undoLabel(state: AuctionState) {
-  const last = state.sales[0];
+  const last = state.sales.find(lot => lot.status === 'sold');
   return last ? `Undo ${findPlayer(state, last.playerId)?.name ?? last.playerId} ${dollars(last.highBid)}?` : 'Undo?';
 }
 
@@ -853,25 +833,22 @@ export function CommissionerBar({ state, busy, connected, send, pendingControl }
   pendingControl?: 'pause' | 'resume' | null;
 }) {
   const d = state.draft;
+  const latestSale = state.sales.find(lot => lot.status === 'sold');
+  if (d.mode !== 'sealed-v1') return null;
   if (d.status === 'setup' || d.status === 'complete') {
-    return d.status === 'complete' && state.sales.length ? (
+    return d.status === 'complete' && latestSale ? (
       <div className="commish">
-        <ConfirmButton key={`undo-${state.sales[0]?.id ?? 'none'}`} className="ghost small" label="Undo last sale"
+        <ConfirmButton key={`undo-${latestSale?.id ?? 'none'}`} className="ghost small" label="Undo last sale"
           confirmLabel={undoLabel(state)} disabled={busy}
-          onConfirm={() => state.sales[0] && void send({ type: 'undo', lotId: state.sales[0].id })} />
+          onConfirm={() => latestSale && void send({ type: 'undo', lotId: latestSale.id })} />
       </div>
     ) : null;
   }
   return (
     <div className="commish">
-      <ConfirmButton key={`undo-${state.sales[0]?.id ?? 'none'}`} className="ghost small" label="Undo last sale"
-        confirmLabel={undoLabel(state)} disabled={busy || !state.sales.length} title="Returns the player and refunds the price, then pauses"
-        onConfirm={() => state.sales[0] && void send({ type: 'undo', lotId: state.sales[0].id })} />
-      <ConfirmButton key={`force-${state.lot?.id}-${state.lot?.highBidderId}-${state.lot?.highBid}`} className="ghost small" label="Force end"
-        confirmLabel={state.lot ? `Sell to ${nameOf(state, state.lot.highBidderId)} ${dollars(state.lot.highBid)}?` : 'Sell?'}
-        disabled={busy || !state.lot} title="Sell now to the high bidder"
-        onConfirm={() => state.lot && void send({ type: 'force', lotId: state.lot.id,
-          expectedHighBidderId: state.lot.highBidderId, expectedHighBid: state.lot.highBid })} />
+      <ConfirmButton key={`undo-${latestSale?.id ?? 'none'}`} className="ghost small" label="Undo last sale"
+        confirmLabel={undoLabel(state)} disabled={busy || !latestSale} title="Returns the player and refunds the price, then pauses"
+        onConfirm={() => latestSale && void send({ type: 'undo', lotId: latestSale.id })} />
       <button className="secondary small" disabled={busy || !connected} aria-busy={Boolean(pendingControl)}
         title={!connected ? 'Reconnecting…' : undefined}
         aria-describedby={!connected ? 'room-connection-status' : undefined}
@@ -892,4 +869,90 @@ export function turnsUntil(state: AuctionState, me: Manager) {
   if (!canNominate(state, me)) return null;
   const position = upcomingNominators(state).indexOf(me.id);
   return position < 0 ? null : position + 1;
+}
+
+function QueueAdd(props: RoomProps & { player: Player }) {
+  const [amount, setAmount] = useState('');
+  const value = amount === '' ? undefined : Number(amount);
+  const error = nominationBlocker(props, props.player, value);
+  const queued = props.privateSeat?.queue.some(entry => entry.playerId === props.player.id);
+  return <form className="queue-add" onSubmit={event => {
+    event.preventDefault();
+    if (!error) void props.editQueue?.({ type: 'add', playerId: props.player.id, ...(value === undefined ? {} : { amount: value }) });
+  }}>
+    <input aria-label={`Queue bid for ${props.player.name}`} inputMode="numeric" placeholder="Optional sealed bid"
+      value={amount} onChange={event => setAmount(event.target.value)} />
+    <button disabled={props.busy || !props.connected || !!error || queued || props.state.draft.status === 'complete'}>
+      {queued ? 'Queued' : 'Add to my queue'}</button>
+    {error && <span>{error}</span>}
+  </form>;
+}
+function QuickQueue(props: RoomProps & { player: Player }) {
+  const { player, privateSeat } = props;
+  const queued = privateSeat?.queue.some(entry => entry.playerId === player.id);
+  if (maxBid(props.me.budget, player, entriesOf(props.state, props.me.id), props.state.players) < 1) {
+    return <small className="blocked">No spot</small>;
+  }
+  return <button className={`queue-quick ${queued ? 'queued' : ''}`}
+    disabled={props.busy || !props.connected || !privateSeat || queued}
+    aria-label={queued ? `${player.name} is in your queue` : `Add ${player.name} to your queue`}
+    onClick={event => {
+      event.stopPropagation();
+      void props.editQueue?.({ type: 'add', playerId: player.id });
+    }}>
+    {queued ? 'Queued' : '+ Queue'}
+  </button>;
+}
+function QueueRow(props: RoomProps & { entry: QueueEntry; index: number; entries: QueueEntry[] }) {
+  const { entry, entries, index } = props;
+  const [amount, setAmount] = useState(entry.amount === undefined ? '' : String(entry.amount));
+  const value = amount === '' ? undefined : Number(amount);
+  const valid = value === undefined || Number.isSafeInteger(value) && value >= 1;
+  const dirty = value !== entry.amount;
+  function move(offset: number) {
+    const ids = entries.map(entry => entry.id);
+    [ids[index], ids[index + offset]] = [ids[index + offset], ids[index]];
+    void props.editQueue?.({ type: 'reorder', ids });
+  }
+  const name = findPlayer(props.state, entry.playerId)?.name ?? entry.playerId;
+  return <li className="queue-row" data-player={entry.playerId}>
+    <span className="queue-rank">{index + 1}</span>
+    <span className="queue-name">
+      <strong title={name}>{name}</strong>
+      {entry.reason && <small className="queue-reason">Skipped: {entry.reason}. Kept for your next turn.</small>}
+    </span>
+    <form onSubmit={event => {
+      event.preventDefault();
+      if (valid && dirty) void props.editQueue?.({ type: 'edit', id: entry.id, ...(value === undefined ? {} : { amount: value }) });
+    }}>
+      <label className="money">
+        <span aria-hidden="true">$</span>
+        <input aria-label={`Queued bid for ${name}`} placeholder="No bid" inputMode="numeric" pattern="[0-9]*" autoComplete="off"
+          value={amount} onChange={event => setAmount(event.target.value)} />
+      </label>
+      <button disabled={props.busy || !valid || !dirty}>Save</button>
+    </form>
+    <div className="queue-actions">
+      <button aria-label={`Move ${name} up`} disabled={props.busy || index === 0} onClick={() => move(-1)}>↑</button>
+      <button aria-label={`Move ${name} down`} disabled={props.busy || index === entries.length - 1} onClick={() => move(1)}>↓</button>
+      <button aria-label={`Remove ${name}`} disabled={props.busy}
+        onClick={() => void props.editQueue?.({ type: 'remove', id: entry.id })}>✕</button>
+    </div>
+  </li>;
+}
+export function QueuePanel(props: RoomProps) {
+  const entries = props.privateSeat?.queue ?? [];
+  return <section className="panel queue" aria-label="My queue">
+    <div className="panel-head">
+      <h2>My queue · {entries.length}</h2>
+      <span>Private · runs only on your turn</span>
+    </div>
+    <div className="scroll">
+      {entries.length ? <ol className="queue-list">{entries.map((entry, index) => <QueueRow {...props}
+        key={`${entry.id}:${entry.amount ?? ''}`} entry={entry} index={index} entries={entries} />)}</ol>
+        : <p className="empty-note">Empty. Tap <strong>+ Queue</strong> on a player. When your turn starts,
+          the first legal player is nominated for you.</p>}
+    </div>
+    {entries.length > 0 && <p className="queue-foot">An amount becomes your sealed bid. Blank nominates without a bid.</p>}
+  </section>;
 }

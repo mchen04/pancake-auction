@@ -11,18 +11,16 @@
     "import:sleeper": "tsx scripts/import.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
-    "test": "vitest run tests/rules.test.ts tests/import.test.ts tests/simulation.test.ts tests/review.test.tsx tests/import-cache.test.ts tests/evidence.test.ts tests/local-ports.test.ts tests/mutation-retry.test.ts tests/port-closure.test.ts tests/nomination-candidate.test.ts tests/clock-samples.test.ts tests/evidence-hardlink.test.ts",
-    "test:db": "tsx tests/teardown.ts && tsx tests/websocket-retry.ts && tsx tests/db.ts && tsx tests/review-db.ts && tsx tests/pool-process.ts && tsx tests/done-db.ts && tsx tests/nomination-replay.ts && tsx tests/turn-intent.ts && tsx tests/import-metadata.ts",
-    "sim": "tsx scripts/sim.ts",
+    "test": "vitest run tests/*.test.ts tests/*.test.tsx",
+    "test:db": "tsx tests/sealed-db.ts && tsx tests/teardown.ts && tsx tests/pool-process.ts && tsx tests/import-metadata.ts",
     "verify": "tsx scripts/verify.ts",
     "league:check": "tsx scripts/cli.ts check",
-    "test:ui": "tsx tests/ui.ts && tsx tests/preference.ts && tsx tests/connection.ts && tsx tests/turn-client.ts && tsx tests/clock-network.ts && tsx tests/roster-slots.ts && tsx tests/clock-jump.ts && tsx tests/opening-bid.ts && tsx tests/resume-queue.ts",
+    "test:ui": "tsx tests/sealed-ui.ts",
     "test:volume": "tsx tests/pool-volume.ts",
-    "test:room": "tsx tests/ui-import.ts",
-    "test:layout": "tsx tests/layout.ts",
     "backend:local": "tsx scripts/local-dev.ts",
-    "test:helper-download": "node tests/backend-download.mjs",
-    "test:local": "tsx tests/ownership-gap.ts && tsx tests/backend-deadline.ts && tsx tests/process-groups.ts && node tests/bootstrap-cache.mjs && node tests/bootstrap-concurrency.mjs && node tests/bootstrap-config.mjs && tsx tests/preparation-lock.ts && tsx tests/backend-network.ts && tsx tests/local-dev.ts && tsx tests/local-state.ts && tsx tests/setup-cleanup.ts"
+    "test:local": "tsx tests/ownership-gap.ts && tsx tests/backend-deadline.ts && tsx tests/process-groups.ts && node tests/bootstrap-cache.mjs && node tests/bootstrap-concurrency.mjs && node tests/bootstrap-config.mjs && tsx tests/preparation-lock.ts && tsx tests/backend-network.ts && tsx tests/local-dev.ts && tsx tests/local-state.ts && tsx tests/setup-cleanup.ts",
+    "test:layout": "tsx tests/layout.ts && tsx tests/roster-slots.ts && tsx tests/connection.ts",
+    "test:room": "tsx tests/ui-import.ts"
   },
   "dependencies": {
     "convex": "^1.46.0",
@@ -36,6 +34,7 @@
     "@types/react-dom": "^19.2.0",
     "eslint": "^9.0.0",
     "eslint-config-next": "^16.0.0",
+    "playwright-core": "^1.64.1",
     "tsx": "^4.20.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"

@@ -1,6 +1,6 @@
 import { ConvexHttpClient } from 'convex/browser';
 import { api, type MutationResult } from '../convex/_generated/api';
-import type { Action, AuctionState, Player } from './types';
+import type { Action, AuctionState, Player, QueueAction } from './types';
 import { retryAbortedMutation } from './mutation-retry';
 
 export class RuleError extends Error {
@@ -22,6 +22,10 @@ export class AuctionClient {
             this.pool = await this.transport.query(api.auction.pool, { revision: state.poolRevision });
         }
         return { ...state, players: this.pool.players };
+    }
+    async privateSeat(token: string) { return this.transport.query(api.auction.privateSeat, { token }); }
+    async queue(action: QueueAction, token: string) {
+        return unwrap(await this.transport.mutation(api.auction.editQueue, { token, action }));
     }
     async claim(managerId: number) {
         return unwrap(await retryAbortedMutation(() =>

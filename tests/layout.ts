@@ -65,7 +65,7 @@ const geometry = `(() => {
     const rect = e => {const r=e.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,
         width:r.width,height:r.height};};
     const visible = e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
-    const controls = [...document.querySelectorAll('button,input,.result-row b')].filter(visible).flatMap(e => {
+    const controls = [...document.querySelectorAll('button,input,.result-row b,.revealed-lot summary')].filter(visible).flatMap(e => {
         const r=rect(e);if(!r.width||!r.height)return [];
         const panel=e.closest('.panel,.topbar,.tabbar');if(!panel)return [];
         const p=rect(panel);const scroll=e.closest('.scroll,.block-information');const s=scroll?rect(scroll):p;
@@ -78,7 +78,7 @@ const geometry = `(() => {
         document.documentElement.scrollHeight],bodyWidth:document.body.scrollWidth,
         roomWidth:document.querySelector('.room').scrollWidth,controls,tab,
         tabHeight:panel.querySelector('.scroll').clientHeight,
-        bidControls:[...document.querySelectorAll('.bid-buttons button,.bid-buttons input,.bid-footer>button')]
+        bidControls:[...document.querySelectorAll('.sealed-form button,.sealed-form input')]
             .map(e=>({text:e.textContent||e.getAttribute('aria-label'),rect:rect(e),disabled:e.disabled,
                 hit:e.contains(document.elementFromPoint((rect(e).x+rect(e).right)/2,(rect(e).y+rect(e).bottom)/2))})),
         block:rect(document.querySelector('.block')),font:getComputedStyle(document.body).fontFamily};
@@ -98,12 +98,12 @@ function assertFrame(proof: Awaited<ReturnType<typeof evaluate>>) {
     }
 }
 function assertBids(proof: Awaited<ReturnType<typeof evaluate>>) {
-    assert.equal(proof.bidControls.length, 5);
+    assert.equal(proof.bidControls.length, 3);
     for (const { rect: r, text, hit } of proof.bidControls) {
         assert(hit && r.height >= 28 && r.y >= proof.block.y && r.bottom <= proof.block.bottom + 1
             && r.bottom <= proof.viewport[1], `Bid control hidden: ${text}`);
     }
-    assert(proof.bidControls.filter((control: { disabled: boolean }) => !control.disabled).length >= 4);
+    assert(proof.bidControls.filter((control: { disabled: boolean }) => !control.disabled).length >= 2);
 }
 async function main() {
     const root = process.env.EVIDENCE_DIR;
@@ -172,7 +172,7 @@ async function main() {
                     await writeFile(`${dir}/width-${width}-${tab}.json`, JSON.stringify(proof, null, 2));
                     assertFrame(proof);
                     if (tab === 'Results' || width >= 1220) {
-                        assert(proof.controls.some((control: { text: string }) => control.text === '$35'));
+                        assert(proof.controls.some((control: { text: string }) => control.text.includes('$35')));
                     }
                 }
                 if ([1181, 1280, 1440].includes(width)) {
@@ -234,8 +234,8 @@ async function main() {
                                 && detail.top >= detail.box.top - 1;
                             assert(reachable, 'Last detail row is unreachable');
                             assertBids(await evaluate(geometry));
-                            await browser('focus', '[aria-label="Bid amount"]');
-                            await browser('fill', '[aria-label="Bid amount"]', '50');
+                            await browser('focus', '[aria-label="Sealed bid amount"]');
+                            await browser('fill', '[aria-label="Sealed bid amount"]', '50');
                             assertBids(await evaluate(geometry));
                             return { ...proof, detail };
                         }

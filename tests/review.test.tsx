@@ -3,10 +3,22 @@ import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { BlockPanel, PlayerDetails, PoolPanel, RosterPanel, turnsUntil } from '../app/components';
 import { canNominate, rankedDynastyAdp } from '../lib/rules';
-import { Strategy } from '../scripts/strategy';
 import { roomFixture } from './room-fixture';
 
 describe('review component regressions', () => {
+    it('renders stored unsold-cycle completion with an earlier-rules label', () => {
+        const state = roomFixture();
+        state.lot = null;
+        state.draft.status = 'complete';
+        state.draft.completionReason = 'full-cycle-unsold';
+        const html = renderToString(createElement(BlockPanel, {
+            state, me: state.managers[0], busy: false, connected: true, send: async () => {},
+            opening: undefined, setOpening: () => {}
+        }));
+        expect(html).toContain('Draft complete');
+        expect(html).toContain('Completed under earlier auction rules.');
+        expect(html).not.toContain('No manager can nominate another player.');
+    });
     it.each([[0, null], [1.3, 1.3], [699, 699], [999, null], [null, null], [-1, null], [1000, null]])(
         'C7 ranked dynasty ADP %s becomes %s', (raw, expected) => {
             expect(rankedDynastyAdp(raw)).toBe(expected);
@@ -38,7 +50,7 @@ describe('review component regressions', () => {
         state.players = [];
         const html = renderToString(createElement(BlockPanel, {
             state, me: state.managers[0], busy: false, connected: true, send: async () => {},
-            clockSample: null, opening: 1, setOpening: () => {}
+            opening: 1, setOpening: () => {}
         }));
         expect(html).toContain('bid-controls');
         expect(html).toContain('room-0');
@@ -69,7 +81,7 @@ describe('review component regressions', () => {
         state.managers[1].done = true;
         expect(turnsUntil(state, state.managers[1])).toBeNull();
     });
-    it('C7 unranked 999 is hidden in the pool and ignored in valuations', () => {
+    it('C7 unranked 999 is hidden in the pool and player details', () => {
         const state = roomFixture();
         const player = { ...state.players[0], adp: 999, projection: 60 };
         state.players = [player];
@@ -81,8 +93,6 @@ describe('review component regressions', () => {
         const details = renderToString(createElement(PlayerDetails, { player }));
         expect(details).not.toContain('999.0');
         expect(details).toContain('Unranked by Sleeper');
-        const strategy = new Strategy(42, 3, state.players);
-        expect(strategy.valuation(state, player)).toBe(strategy.valuation(state, { ...player, adp: null }));
     });
     it('S4/C8 available Out and explicit Done negative controls match the turn hint', () => {
         const state = roomFixture();

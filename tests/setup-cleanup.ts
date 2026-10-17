@@ -7,7 +7,7 @@ import { portListening, requireClosedPort, sleep } from '../scripts/local-backen
 
 const root = resolve(process.env.EVIDENCE_DIR!, 'setup-cleanup');
 const results: Record<string, unknown>[] = [];
-const protectedPorts = [3100,3210,3211,3220,3221,3917];
+const protectedPorts = [3100,3210,3211,6790,3220,3221,3917];
 type Ready = { action: string; pid: number; port: number; sitePort: number; directory: string };
 async function records(directory: string): Promise<Ready[]> {
     return (await readFile(`${directory}/local-backends.jsonl`, 'utf8').catch(() => '')).trim()
@@ -21,7 +21,7 @@ async function run(entry: string, failure: 'admin' | 'bundle' | 'before' | 'brow
     const started = performance.now();
     const child = spawn(process.execPath, ['--import', 'tsx', '--import', resolve('tests/setup-failure.mjs'),
         `tests/${entry}.ts`], { env: { PATH: process.env.PATH, NODE_ENV: 'test', EVIDENCE_DIR: directory,
-            AUCTION_TEST_FAIL_ADMIN: failure === 'admin' ? '1' : '0',
+            AUCTION_NEXT_DEV: '1', AUCTION_TEST_FAIL_ADMIN: failure === 'admin' ? '1' : '0',
             AUCTION_TEST_FAIL_BROWSER: failure === 'browser' ? '1' : '0' }, stdio: ['ignore','pipe','pipe'] });
     let output = '';
     child.stdout.on('data', data => { output += data; });
@@ -36,7 +36,7 @@ async function run(entry: string, failure: 'admin' | 'bundle' | 'before' | 'brow
             if (failureAt === null && /Injected post-acquisition|Injected browser|Build failed|EEXIST/.test(output)) {
                 failureAt = performance.now();
             }
-            if (performance.now() - started > 60000
+            if (performance.now() - started > 120000
                 || failureAt !== null && performance.now() - failureAt > 15000) {
                 timedOut = true;
                 break;
@@ -48,8 +48,11 @@ async function run(entry: string, failure: 'admin' | 'bundle' | 'before' | 'brow
         assert(ports.every(port => !protectedPorts.includes(port)));
         const reports = (await readFile(`${directory}/resources.jsonl`,'utf8').catch(()=>''))
             .trim().split('\n').filter(Boolean).map(line=>JSON.parse(line));
+        const uiEvidence = JSON.parse(await readFile(`${directory}/chromium/evidence.json`, 'utf8').catch(() => '{}'));
+        const nextPort = uiEvidence.frontend ? Number(new URL(uiEvidence.frontend).port) : undefined;
         const frontendPorts = reports.flatMap(report=>report.servers.map((server:{port:number|null})=>server.port))
             .filter((port:unknown):port is number=>typeof port==='number'&&!ports.includes(port));
+        if (nextPort) frontendPorts.push(nextPort);
         assert(frontendPorts.every((port:number)=>!protectedPorts.includes(port)));
         if(child.exitCode!==null||child.signalCode!==null) {
             await Promise.all([...ports,...frontendPorts].map(requireClosedPort));
@@ -117,7 +120,7 @@ async function run(entry: string, failure: 'admin' | 'bundle' | 'before' | 'brow
 async function main() {
     await mkdir(root, { recursive: true });
     for (const [entry, failure] of [['roster-slots','before'],['roster-slots','bundle'],
-        ['roster-slots','admin'],['ui','admin'],['connection','admin'],['ui','browser'],['ui','none']] as const) {
+        ['roster-slots','admin'],['sealed-ui','admin'],['connection','admin'],['sealed-ui','browser'],['sealed-ui','none']] as const) {
         try { await run(entry, failure); }
         catch (error) {
             console.error(`FAIL ${entry} ${failure}: ${error}`);

@@ -1,163 +1,270 @@
 # Pancake Auction
 
-A single-page NBA dynasty startup auction for ten managers. Next.js renders the room. Convex stores the draft and supplies live subscriptions. Runtime code reads only the imported database pool.
+Pancake Auction runs one sealed-bid lot at a time. Convex owns deadlines, final responses, roster checks, and awards.
+The Next.js room uses seat tokens and subscriptions. Ten managers start with $1,000 each.
 
 ## Setup
 
-Use Node 24 or later and install dependencies with `npm ci`. These steps initialize a new local league. Preserve the data and claimed seats of an existing league.
+Use Node 24 or later. Install dependencies with `npm ci`.
+These steps initialize a new local league. Preserve the data and claimed seats of an existing league.
 
-Run `npm run backend:local` in one terminal and keep it running. It starts an anonymous local Convex backend without a cloud login. Its private CLI home and persistent database live under the ignored `.convex` directory. The CLI writes the public frontend URL for Next.js. Restarts reuse the same local data. Backend ports default to 3210 and 3211. `CONVEX_LOCAL_CLOUD_PORT` and `CONVEX_LOCAL_SITE_PORT` select different ports when needed.
-
-In another terminal, load the managers, import the pool, and run the readiness check. Then run `npm run dev` and open `http://localhost:3000`. Keep the backend terminal running alongside Next.js. A local production preview uses `npm run build`, then `npm run start -- -p 3000`.
-
-`CONVEX_LOCAL_DIR` optionally selects the generated local deployment configuration directory for admin commands. `CONVEX_URL` or `NEXT_PUBLIC_CONVEX_URL` selects the frontend's backend URL. `NEXT_DIST_DIR` optionally separates build output. No cloud deployment or deploy key is required for local verification.
+Start the local backend in one terminal and keep it running:
 
 ```sh
+npm ci
 npm run backend:local
-npm run league:managers
-EVIDENCE_DIR=/absolute/path/outside/repo npm run import:sleeper
-EVIDENCE_DIR=/absolute/path/outside/repo npm run import:sleeper -- --apply
-npm run league:check
-npm run dev
-npm run seat:release -- --name "<manager name>"
-npm run build
-npm run start -- -p 3000
-EVIDENCE_DIR=/absolute/path/outside/repo npm run verify
-EVIDENCE_DIR=/absolute/path/outside/repo npm run sim -- --runs 3 --timing fast --seed 42
-EVIDENCE_DIR=/absolute/path/outside/repo npm run sim -- --runs 1 --timing real --seed 42
 ```
 
-`league/managers.json` contains Michael, Matthew, Justin, Tianna, Kyle, Tyler, Jeremy, Jet, Petch, and Zach. Michael is commissioner. The internal manager loader refuses after the draft starts. The read-only readiness check requires the exact configuration, a completed import with matching pool counts, setup status, no lots, and production 10/10/5/15 timings. Nomination order is randomized at draft start.
+The backend runs anonymously without a cloud login.
+Its private CLI home and persistent database live under the ignored `.convex` directory.
+The CLI writes the public backend URL for Next.js. Restarts reuse the same local data.
+Backend ports default to 3210 and 3211. Set different ports if those ports are occupied:
 
-Import, manager setup, and CLI recovery call internal functions through the Convex CLI admin path. They are unavailable to public clients. This phase targets local deployments only.
+```sh
+CONVEX_LOCAL_CLOUD_PORT=3220 CONVEX_LOCAL_SITE_PORT=3221 npm run backend:local
+```
 
-## Local verification
+In another terminal, load the managers and preview the import before applying it:
 
-Verification is standalone after `npm ci`; it does not require the companion mini helper or a running development server. Install `agent-browser` and its Chromium browser before browser checks. The lifecycle tests also use `zip`, `unzip`, and standard Unix process tools. A cold backend cache downloads the pinned public Convex binary. Verification does not use a cloud login or fetch from Sleeper.
+```sh
+export EVIDENCE_DIR=/absolute/path/outside/repo
+npm run league:managers
+npm run import:sleeper
+npm run import:sleeper -- --apply
+npm run league:check
+npm run dev
+```
 
-Set `EVIDENCE_DIR` to an absolute path outside the repository, then run `npm run verify`. Physical containment checks include symlinks, missing suffixes, and final write targets. Each backend scenario and simulation uses an isolated anonymous local backend with its own ports, database, and private CLI home. Cleanup stops owned resources and removes their state. Failed or uncertain teardown preserves state and reports an error. A backend startup failure fails the test.
+The first import command is a dry run with no database writes. `--apply` writes the imported pool.
+Both commands use the same evidence directory to reuse the recorded source data within 24 hours.
+Manager setup and import require an empty draft in setup.
+The readiness check requires ten configured managers, a completed import, no lots, and both 24-hour windows.
+Starting the auction remains a separate commissioner action in the room.
 
-`verify` runs these twelve commands in order and stops at the first failure:
+Open `http://localhost:3000`. Keep the backend running alongside Next.js.
+Use `npm run dev -- -p 3001` or set `PORT` to select another frontend port.
+A local production preview uses `npm run build`, then `npm run start -- -p 3000`.
+The backend must remain running for that preview too.
 
-| Step | Command |
+To recover a claimed seat, run:
+
+```sh
+npm run seat:release -- --name "<manager name>"
+```
+
+Manager setup, import, readiness, and seat recovery use the local Convex CLI admin path.
+Their internal functions are unavailable to public clients.
+
+| Variable | Purpose |
 | --- | --- |
-| 1 | `npm run typecheck` |
-| 2 | `npm run lint` |
-| 3 | `npm run test` |
-| 4 | `npm run test:local` |
-| 5 | `npm run test:db` |
-| 6 | `npm run test:ui` |
-| 7 | `npm run test:volume` |
-| 8 | `npm run build` |
-| 9 | `npm run test:layout` |
-| 10 | `npm run test:room` |
-| 11 | `npm run sim -- --runs 3 --timing fast --seed 1042 --skip-build` |
-| 12 | `npm run sim -- --runs 1 --timing real --seed 2042 --skip-build` |
-
-Logs and exit codes go under `EVIDENCE_DIR/verify-<timestamp>/`. Results include browser screenshots, resource-closure records, per-draft summaries, event logs, and the seed spread. `test:local` covers backend startup, caches, locks, deadlines, restart, and cleanup. `test:db` covers real Convex transactions, scheduler guards, claims, auction races, and replay regressions. Browser suites cover the production room, connection, clock, opening bids, controls, and roster layout.
-
-Isolated setup has a 120-second total deadline after the existing 60-second preparation-lock wait. It covers bootstrap, readiness responses, function push, and the smoke query. `AUCTION_BACKEND_SETUP_TIMEOUT_MS` overrides it within 250–300,000 ms. Cached starts normally take a few seconds; the deadline also allows a cold bootstrap download and retries. Teardown uses verified process ownership, bounded signal escalation, and checks that both backend ports close.
-
-Simulations seed the recorded public Sleeper fixture, preserving its original `fetchedAt` and source URLs. They never re-pull data. Ten independent Convex HTTP clients claim seats and call the public API concurrently. A separate process restores a saved token during each run. Bots use seeded valuations, projections, dynasty ADP, manager bias, noise, and positional need. They raise concurrently, snipe, bid exact maximums, give up, or await expiry. Pause and resume carry the observed control generation.
-
-Fast timings are 3/3/+1.5/4.5 seconds; real timings are 10/10/+5/15 seconds. Every draft requires at least 400 accepted bids, 25 expiry sales, three nomination timeouts, and five exact-maximum bids. Average unspent budget must stay below $150, and all 200 active spots must fill. Each draft also proves Taxi and IR wins after active rosters fill, and passes all 18 independent replay invariants.
-
-### Optional mini companion
-
-The companion `../tools/mini-run.sh <label> <command...>` runs checks on a separate Mac mini through existing SSH configuration. It is outside this repository and is optional. Default `verify` and `test:local` commands do not depend on it.
-
-Each helper invocation verifies a source manifest and uses a separate remote source and dependency copy. Evidence returns to `evidence/mini/<label>/<run-id>/artifacts/` beside the repository. Use the printed invocation path rather than label-only logs. The adjacent `retrieval.json` separates the command exit from retrieval validation. Missing or mismatched evidence fails. Cleanup removes the owned run workspace and retains evidence and bounded dependency caches.
-
-The helper's cold binary download has a 120-second total deadline for headers and body. This allows roughly 0.5 MB/s for a 60 MB archive. `MINI_RUN_BACKEND_DOWNLOAD_MS` overrides it within 250–300,000 ms. A valid cached binary needs no download.
-
-`npm run test:helper-download` is an optional regression for that external helper. It requires `../tools/mini-run.mjs`, or `MINI_RUN_HELPER_SOURCE` pointing to the companion module, plus an external `EVIDENCE_DIR`. It uses local HTTP fixtures, real zip/unzip, and a labelled fixture executable. It does not start a real Convex backend. Neither `verify` nor `test:local` invokes it.
+| `EVIDENCE_DIR` | Absolute directory outside the repository for import snapshots and verification evidence. |
+| `CONVEX_LOCAL_DIR` | Generated deployment configuration directory for admin commands; defaults to `.convex/local/default`. |
+| `CONVEX_LOCAL_CLOUD_PORT` | Local backend API port; defaults to 3210. |
+| `CONVEX_LOCAL_SITE_PORT` | Local backend site port; defaults to 3211 and must differ from the API port. |
+| `CONVEX_URL` | Backend URL used by Next.js; takes precedence over `NEXT_PUBLIC_CONVEX_URL`. |
+| `NEXT_PUBLIC_CONVEX_URL` | Backend URL used when `CONVEX_URL` is unset; local setup supplies it. |
+| `NEXT_DIST_DIR` | Optional Next.js output directory; defaults to `.next`. Use the same value for build and start. |
+| `PORT` | Next.js frontend port; defaults to 3000. The `-p` command option can also select it. |
 
 ## Auction rules
 
 | Rule | Behavior |
 | --- | --- |
-| Budget | $1,000 per manager; whole-dollar bids; minimum $1. |
-| Order | A cryptographically random fixed permutation; straight rotation. |
-| Nomination | Ten seconds; player plus opening bid; the nominator makes the first bid. |
-| Timeout | With an active opening, nominate the top projected legally available player for $1. Missing projections sort last. With only taxi/IR openings, record a passed turn without marking done. |
-| Bid timer | Start at ten seconds. Later accepted bids use `min(old deadline + 5s, Convex now + 15s)`. |
-| Late bid | Reject at or after the deadline; resolve the expired lot first. |
-| Maximum | Best legal placement: remaining budget minus $1 for each active opening left afterward. Taxi and IR never add reserve. |
-| Give up | Everyone except the high bidder may pass. No re-entry on that lot. Managers unable to raise count as out. |
-| Award | Award once at expiry, when all others are out, or on commissioner force-end. |
-| Placement | Prefer Active, then Taxi, then IR, provided that placement supports the price. Owners can move players until completion. |
-| Done | A manager with only taxi/IR openings may stop or resume nominations and continue bidding. |
-| Completion | End when no manager can nominate, or all remaining eligible managers pass a cycle without a nomination. |
+| Managers | Keep all ten names in `league/managers.json`. Michael is the commissioner. |
+| Nomination order | Start randomizes one fixed order. Turns follow that order throughout the draft. |
+| Nomination window | Each turn has 24 hours. Manual nominations can include an optional positive whole-dollar sealed bid. |
+| Nomination timeout | Nominate the highest-projected legally available player, with no attached bid. |
+| Bid window | Each lot has one fixed 24-hour deadline. Responses never extend it. |
+| Response | Each eligible manager submits one final positive whole-dollar bid or explicit Pass ($0). No edits or re-entry. |
+| Automatic pass | Managers without a legal placement or affordable $1 bid pass automatically. |
+| Resolution | Resolve when all managers have responded, including automatic passes, or when the deadline arrives. Missing responses become passes. |
+| Price | The highest positive bidder wins and pays their own bid. |
+| Ties | Priority starts as the reverse nomination order. The highest-priority tied bidder wins and moves to the bottom. |
+| Other wins | A non-tie win leaves priority unchanged. All-zero responses do not rotate priority. |
+| All pass | The player stays available. The next eligible manager gets the nomination turn. |
+| Done | A manager with 20 active players and open Taxi or IR places can stop nominations. They can still bid. |
+| Completion | End only when no manager can legally nominate. Done managers skip nominations; other managers need an affordable legal available player. |
 
-Active contains PG, SG, SF, PF, C, G, F, three UTIL, and ten bench slots. G accepts PG, SG, or G. F accepts SF, PF, or F. UTIL and bench accept any player. A bipartite matching assigns every active player to a distinct eligible slot. Moves must preserve the matching, capacity, and the budget reserve. They must also preserve any standing high bid.
+No-sale rotations continue while any manager can nominate. Unsold players remain available for later turns.
+Each turn receives the normal 24-hour nomination window unless its owner has a legal queue entry.
+A queue nominates at most one player per turn. A nomination without an amount waits for responses or its 24-hour deadline.
+The nominator is eligible, so automatic passes from other managers cannot instantly resolve that blank nomination.
+An immediate queued resolution requires a positive attached bid and consumes a roster place.
+Each mutation permits at most one initial resolution plus one resolution per league roster place.
 
-Taxi has three places. A rookie (`years_exp=0`) qualifies. A non-rookie qualifies with a complete career total below 65 games. A lower bound of 65 or more fails. A smaller incomplete lower bound or missing total is unknown and fails. IR has two places. Only the exact stored injury status `Out` qualifies. `IR`, `DTD`, `GTD`, `Questionable`, `Doubtful`, and null fail.
+Taxi/IR-only nomination timeouts nominate a legal player without a bid. Done remains an explicit choice.
 
-A manager with a full active roster can still bid and nominate eligible Taxi or Out players. Their maximum is the full remaining budget. With active openings, a taxi/IR placement reserves $1 for every active opening. Taxi and IR can remain empty. Full groups, empty eligible pools, exhausted budgets, explicit Done choices, and a full cycle of timeout passes terminate without deadlock. Each nomination clears the passed-turn cycle. A roster move clears that manager’s earlier pass because their legal nominations can change. Taxi/IR-only teams keep their turns unless they choose Done or have no legal nomination. The event log records each passed turn and the completion reason.
+## Rosters and budget
 
-Pause stores the exact remaining milliseconds. Resume adds that amount to the Convex mutation clock. Undo targets the sale shown in its confirmation. A changed latest sale produces a 409 instead of undoing another sale. Undo removes the confirmed sale from its current placement and refunds the price. It returns the player, voids the open lot and all its bids through the lot status, restores the undone nominator, and pauses. It clears the nominator's Done flag and any Done flag made invalid by an active spot reopening. Undo repeats through the sale stack. Bid and event records remain for audit. Automatic awards wait while paused. Resume evaluates expiry and all-out inside the serializable transaction. Force-end awards the current high bid immediately, including while paused.
+Active has 20 places: PG, SG, SF, PF, C, G, F, three UTIL, and ten Bench.
+G accepts PG, SG, or G. F accepts SF, PF, or F. UTIL and Bench accept any position.
+A full matching must place every active player into a distinct legal spot.
 
-## Storage and clock
+Taxi has three places. Rookies qualify. Non-rookies need a complete career count below 65 games.
+An incomplete count, unknown count, or count of at least 65 fails.
+IR has two places. Only the exact stored injury status `Out` qualifies.
 
-Convex mutations are serializable transactions. Every action validates its seat token, current lot, legal placements, budget, and current draft state inside one mutation. Competing claims, bids, passes, awards, moves, and undos commit atomically. Rule rejections preserve any deadline transition already resolved by that transaction.
+A bid must leave $1 for each active opening after placement. Taxi and IR add no reserve.
+The server checks the best legal placement at submission. It prefers Active, then Taxi, then IR when awarding.
+Roster moves must preserve eligibility, capacity, reserve, and the owner's positive sealed response.
+A move that removes all legal placements gives an unresponded manager an automatic pass.
+Automatic passes remain final if a later move changes eligibility.
+Opening an active spot clears an invalid Done choice.
 
-A singleton draft document holds the monotonic version and the production timing settings. Each running deadline schedules an internal mutation with draft ID, lot ID, version, and expected deadline. The handler does nothing unless every field still matches and the deadline has passed. Pause invalidates earlier timers. Resume restores the exact frozen remainder and schedules a new timer. Mutation-time `Date.now()` comes from Convex; clients supply no decision clock. Dedicated HTTP samples anchor countdowns to browser monotonic time. A detected forward wall/monotonic gap over one second hides digits until sampling recovers. The status reads "Clock not synced. Retrying…". Ordinary focus and backward corrections keep a valid anchor.
+## Private responses and queues
 
-State subscriptions include dynamic draft data and an import revision. A separate pool query subscribes to the imported pool document. Draft changes do not resend that pool. Import revisions come from stored completed imports, so warm clients and separate processes observe refreshes. Current lots also contain player data; missing pool entries retain safe UI fallbacks.
+Public state shows each manager as Responded or Waiting. It does not distinguish a bid from a pass.
+Open lots contain zero placeholders in legacy `highBid` and `highBidderId` fields. They never contain a submitted amount.
+There are no bid or pass events before resolution. The public nomination event contains no initial amount or legal maximum.
+Resolution publishes every manager's response, including automatic and deadline passes, plus the winner and price.
+Results expands each recent lot to show those responses. Older sales load their bids on demand through `auction:result`.
+That indexed query returns nothing for open or void lots.
 
-Tables hold drafts, managers, pools, imports, lots, roster entries, passes, and append-only events. All public writes use the engine; no public reset, import, or event-edit function exists. Internal admin functions have narrow setup and recovery purposes. Test fixture functions are copied into isolated test backends only. The scheduler and transactions follow the [Convex mutation](https://docs.convex.dev/functions/mutation-functions), [scheduler](https://docs.convex.dev/scheduling/scheduled-functions), and [local testing](https://docs.convex.dev/testing/convex-backend) documentation.
+`auction:privateSeat` requires a seat token. It returns only that seat's current response and nomination queue.
+It uses indexed owner lookups. The commissioner has no private-data override.
+A released token loses access. A replacement token inherits the same manager's queue and final response.
 
-## Data sources and gaps
+Tap **+ Queue** on a player row, or open a player's details to add them with an amount.
+Each entry has a player and an optional positive whole-dollar amount. Blank means no attached response.
+There is no queue Pass. Add, edit, remove, and reorder controls apply only to your queue.
+Queues hold at most 100 distinct players. They run only on the owner's nomination turn.
+They never bid on another manager's nomination.
 
-The explicit importer makes fifteen sequential public requests with a descriptive User-Agent and a small delay. Dry-run performs no database writes. With `EVIDENCE_DIR`, it saves a public response snapshot outside the repository. Snapshots and individual source caches store their original fetch time. Apply reuses them for less than 24 hours from that time; reuse never updates their age or file. This avoids a second players request. Without an evidence directory, each invocation fetches again. Sleeper asks callers to fetch the players endpoint at most once per day and stay below 1,000 calls per minute. The internal import mutation refuses after any lot exists or the state leaves setup. There is no override. All player updates and the import record commit together.
+The first legal entry nominates automatically. A valid attached amount becomes the owner's final sealed response.
+A blank amount leaves that response open. Queue amounts are never clamped or changed silently.
+Both enqueue and execution check availability, legal placement, budget, and reserve.
+Unavailable, unaffordable, and ineligible entries stay in place with an owner-only skip reason.
+They are checked again on the next turn. Successful entries are consumed.
+Editing or adding a legal queue entry during your active nomination turn can execute it immediately.
+Paused queues wait until resume. Empty queues receive the normal 24-hour manual nomination window.
+
+## Pause, undo, and commissioner controls
+
+Only the commissioner starts, pauses, resumes, undoes, or releases seats.
+Pause stores the exact remaining milliseconds. Resume creates a deadline from that remainder.
+Responses and nominations are unavailable while paused. Queue edits and legal roster moves remain available.
+There is no early force-award or force-end control.
+
+Undo targets the latest sold lot shown in its confirmation. A stale target fails.
+Undo refunds its price, removes its roster entry, restores the priority list from before that sale, and pauses.
+It returns to that lot's nominator and grants a fresh 24-hour nomination window on resume.
+It voids an open subsequent lot. Those unrevealed responses never enter public results.
+Previously revealed responses remain public. A re-nomination creates a new lot and requires new responses.
+Consumed queue entries stay consumed, including entries used for a voided lot. Undo does not reconstruct private queues.
+Undo clears invalid Done choices. Legacy sales cannot use sealed undo.
+
+## Deadlines and subscriptions
+
+Convex serializes every mutation. The last response and scheduler resolve through the same transaction path.
+Each deadline job carries the draft ID, lot ID, version, and expected deadline.
+A mismatch, paused draft, legacy draft, or early invocation does nothing.
+Pause, resume, new turns, and new lots invalidate stale jobs. Repeated calls cannot double-award.
+Ordinary responses do not schedule replacement deadline jobs.
+
+Public state contains the dynamic draft, roster, recent results, and events.
+A separate query subscribes to the imported player pool. Draft changes do not resend that pool.
+The private subscription returns only the caller's queue and response.
+The browser updates its hours-and-minutes display once per minute without network polling or clock-sync requests.
+The displayed countdown uses the device clock; the stored deadline and Convex clock decide acceptance.
+An incorrect device clock cannot change a deadline or make a late response valid.
+
+## Schema compatibility and migration
+
+The schema retains all legacy tables and required field types, including `passes`, live-lot price fields, and old timing fields.
+New draft mode, priority, lot response metadata, result bids, and event markers are optional.
+The new `responses` and `queues` tables do not alter existing documents.
+Adding indexes does not require document rewrites. No migration wipes data or starts a draft.
+The stored `passedTurns` field remains compatible but has no effect on nomination or completion.
+Previously completed drafts with `completionReason: full-cycle-unsold` still load and show an earlier-rules label.
+They are not reopened automatically.
+
+A draft without `mode: sealed-v1` is legacy. Running, paused, and completed legacy drafts reject sealed actions.
+Scheduled jobs also ignore them. Their old event payloads are not returned publicly.
+An open legacy lot exposes no standing amount through public state.
+The commissioner must arrange an explicit migration for an in-progress legacy draft; no automatic conversion exists.
+Seat recovery remains available.
+
+`league:managers` upgrades an empty legacy setup record to sealed defaults.
+It refuses when any lot or roster entry exists or the draft has left setup.
+It preserves manager identities and seat tokens. Starting remains a separate commissioner action.
+`league:check` requires sealed mode, 24-hour nomination and bid settings, ten managers, and a completed player import.
+
+## Player data and nomination ranking
+
+The importer stores the real Sleeper player pool and Rotowire forecasts exposed through Sleeper.
+Auto-nomination sorts the stored `projection` field descending, then player ID ascending for equal values.
+Missing projections sort last. It excludes sold players and players the nominator cannot legally afford or place.
+It never generates a projection or attaches a timeout bid.
+
+The recorded verification fixture was fetched on 2026-10-14 at 21:21 UTC.
+Tests retain that timestamp and its source URLs. Unit and import-regression fixtures with invented players are marked as synthetic.
+The full draft and browser suites use `tests/fixtures/sleeper-pool.json`.
 
 Sources:
 
-- [Sleeper API documentation](https://docs.sleeper.com/).
 - Players: `https://api.sleeper.app/v1/players/nba`.
-- Undocumented public Rotowire projections: `https://api.sleeper.app/projections/nba/2026?season_type=regular`.
-- Thirteen career seasons: `https://api.sleeper.app/v1/stats/nba/regular/<season>`, for 2013 through 2025.
+- Projections: `https://api.sleeper.app/projections/nba/2026?season_type=regular`.
+- Career seasons: `https://api.sleeper.app/v1/stats/nba/regular/<season>`, 2013 through 2025.
 
-Players require a valid PG/SG/SF/PF/C fantasy position, an active flag, and a team, projection, or dynasty ADP. Defense entries are excluded. Display positions do not replace fantasy eligibility. Source ADP values, including zero values, are preserved. Some active free agents have ADP without a stat forecast and therefore remain in the pool.
+Projected scoring is PTS +1, REB +1, AST +2, STL +4, BLK +4, 3PM +1, FGM +2, FGA −1, FTM +1, FTA −1, TO −2.
+Missing forecasts remain null. Raw projected stats and dynasty ADP remain stored.
+Null, non-positive, and at least 999 ADP values display as unranked and sort last.
+Career coverage is complete when `2026 − years_exp >= 2013`. Older players retain an incomplete lower bound.
+Injuries and eligibility use the imported snapshot throughout the draft.
 
-None of the snapshot’s 1,858 ADP values are non-positive, so zero is not established as a valid rank. Real ranks span 1.3–699; 1,022 entries jump to the 999 sentinel, including 1,016 imported pool players. Null, non-positive, and ≥999 values show “?” with an “Unranked by Sleeper” tooltip, sort last, and add no ADP valuation.
+The importer performs fifteen sequential public requests. Dry-run writes no database data.
+Its external cache retains the original fetch time and expires after 24 hours. Reuse does not extend that age.
+Import is refused after any draft activity. Verification uses recorded data and local HTTP fixtures, without source-network requests.
 
-Projected stats are per game. Scoring is PTS +1, REB +1, AST +2, STL +4, BLK +4, 3PM +1, FGM +2, FGA −1, FTM +1, FTA −1, TO −2. Sleeper calls threes `tpm` and turnovers `to`. The supplied scoring example produces 41. A missing stat line produces a null projection, displayed as “no projection.” Raw stats and dynasty ADP stay stored. Age uses Sleeper age first, then a valid birth_date at import time. Missing age and birth_date produce “age unknown.”
+## Identity and installation
 
-Career games sum regular-season `gp`. A present record with absent or null `gp` contributes zero. Trade schedules can produce more than 82 games for a player in a season. Records before 2013 are unavailable. Coverage is complete when `2026 − years_exp >= 2013`. Older players retain a partial lower bound. No unknown or incomplete total qualifies a non-rookie for taxi. Eligibility and injuries use the stored snapshot throughout the draft; there are no live injury updates.
+The first device to claim a seat receives 256 random bits. Convex stores only its SHA-256 hash.
+The browser stores the seat token in localStorage. Mutations derive the acting manager from that token.
+Anyone with the league link can claim an unclaimed seat. Share it only with managers.
+The release CLI remains available for commissioner seat recovery.
 
-## Identity
+The room is one screen tall on desktop, tablet and phone, including the installed web app. The page itself never scrolls; only panels do.
+The top bar always shows your name, budget left and active roster count. The current-player card keeps the deadline,
+response count, and the bid, Pass and nomination controls on screen at every supported size, including short and landscape phones.
+Desktop shows the queue, players, current player, teams, results and roster together. Narrower screens use one-tap tabs:
+Players, Queue, Teams (phone), My roster and Results. The Queue tab shows how many players are queued.
+Teams shows tie priority from highest to lowest.
+My roster retains 20 active, three Taxi, and two IR rows, including empty places.
+Player search, positions, projections, detailed stats, roster inspection, and placement controls remain available.
 
-The first device to claim a seat receives 256 random bits. The database stores only the SHA-256 hash. The browser keeps the token in localStorage and passes it explicitly to Convex identity queries and mutations. Refresh and reconnect preserve identity. Actions derive the manager from the token; clients do not supply an acting manager ID. Release invalidates the previous token. The commissioner sees claimed seats and can release them. The release CLI provides recovery if the commissioner loses their device.
+A web manifest adds the Pancake name, two PNG icons, theme colors, and `display: standalone`.
+Apple web-app metadata and an Apple touch icon support Safari installation.
+The layout includes safe-area padding and dynamic viewport height. Installation adds no offline bidding or background response automation.
+The `emulated-standalone` CSS class is a layout-only test hook. It changes no auction behavior.
 
-Anyone with the link can claim an unclaimed seat first. There is no authentication beyond possession of the seat token. Share the link with the league only. Browser storage is part of the trust model. Mutations require the seat token; they do not use ambient cookie authority.
+## Local verification
 
-## Sleeper references and league differences
+Verification creates its own backends and frontend servers after `npm ci`.
+Install `agent-browser` and its Chromium browser before browser checks.
+The lifecycle tests also require `zip`, `unzip`, and standard Unix process tools.
+Set `EVIDENCE_DIR` to a directory outside the repository. All test receipts and screenshots belong there.
+The isolated harness starts anonymous local Convex with fresh state and free ports.
+It passes an explicit local URL and a freshly generated local backend key to normal project tooling.
+It never chooses a cloud deployment or reads account credentials.
+Test fixture functions are copied into isolated backend directories only. They are absent from the deployed `convex/` source.
+Simulated clock and shortened deadline controls exist only in those copied fixtures.
 
-[Sleeper auction support](https://support.sleeper.com/en/articles/4056268-do-you-support-auction-drafts) and the [auction overview](https://sleeper.com/blog/auction-draft/) describe rotating nominations, the opening bid, a $1 increment, and awarding the highest bid when time expires. Sleeper resets bids under ten seconds to ten seconds. This league chooses +5 seconds, capped at fifteen. Sleeper blocks full draft columns and allows commissioner pause and undo. Sleeper resets its timer on resume. This app restores the remaining time.
+| Command | Coverage |
+| --- | --- |
+| `npm run typecheck` | TypeScript checks. |
+| `npm run lint` | ESLint, without warnings. |
+| `npm test` | Sealed engine, eligibility, roster, imports, client retry, evidence, and UI rendering boundaries. |
+| `npm run test:local` | Local backend startup, cleanup, cache, ownership, network, and deadline harness regressions. |
+| `npm run test:db` | Public API secrecy, queues, ties, scheduler, compatibility, undo, auth, and a complete ten-manager draft. |
+| `npm run test:volume` | Player-pool subscription delivery remains separate from dynamic state. |
+| `npm run build` | Production Next.js build. |
+| `npm run test:layout` | Roster slots, placements, keyboard controls, compact layouts, and reconnect/pool-loading regressions. |
+| `npm run test:room` | Production room follows a setup import and recovers from a real query failure. |
+| `npm run test:ui` | Chromium UI through agent-browser by default. Every browser mode also checks the one-page matrix: no page scroll, and identity, deadline, response state and actions reachable at phone, landscape, short and desktop sizes. |
+| `AUCTION_BROWSER=safari npm run test:ui` | Real Safari through a separate safaridriver automation session. |
+| `AUCTION_BROWSER=webkit npm run test:ui` | Playwright WebKit, 390×844, mobile user agent, and touch, plus a desktop WebKit context for the one-page size matrix. This is not Safari. |
+| `npm run verify` | Typecheck, lint, units, local harness, database, volume, build, layout regressions, Chromium UI, and import/error recovery, in that order. |
 
-Sleeper does not document the maximum-bid formula. Its screenshots and completed drafts support the inference `remaining − (open draft slots − 1)`. Startup taxi rounds count as draft slots there; IR adds none. This league reserves only active places. Sleeper's [taxi rules](https://support.sleeper.com/en/articles/3640482-how-do-taxi-squads-work) do not allow drafting directly to taxi or IR. This app supports those placements. Sleeper does not document nomination-timeout behavior. This app uses the league's automatic nomination rule.
-
-The league PDF restricts taxi to drafted first-year rookies and disallows undrafted rookies. The card and group chat allow rookies or fewer than 65 career games. This app implements the card. The PDF names ESPN for positions. This app uses Sleeper positions, as requested.
-
-## Draft room
-
-One full-screen page uses panel scrolling without document scrolling. Wide screens show Players, the auction block, Teams, Results, and My roster. At 1219 px and below, Players, My roster, and Results use tabs beside the auction block and Teams. At 860 px and below, all four tabs sit below the auction block. The Players tab opens when a new nomination turn starts.
-
-My roster shows 10 starter rows, 10 Bench rows, 3 Taxi rows, and 2 IR rows. Every empty spot shows a muted Open placeholder, including on mobile. An occupied player replaces a placeholder rather than adding a row. Group counts supplement the rows. If active matching is unavailable, the fallback still shows all 20 active spots.
-
-Activate a team-name button or its visible chevron to inspect that roster below the team row. Enter and Space work too. Only one team roster opens at a time; activating the same team closes it. Inspected rosters use the same occupied and empty slots, player details, and panel scrolling. They are read-only, including when inspecting your own team. My roster retains placement controls. Below 390 px, a commissioner's Release control sits inside the expanded team row.
-
-Player rows show positions, team, age, career games, projection, dynasty ADP, injury, and taxi tags. Player details show the projected stat line and eligibility reasons. Unknown values show "?" in table cells and explicit text in the lot line and details. A winner can move a player to any legal group from My roster or the win banner. Undo, Force end, and seat release require confirmation.
-
-## Delivery boundaries
-
-No deployment, push or PR is part of this stage. Use `league:check` before starting the live draft. Verification data never enters a cloud deployment.
-
-## Compact-screen regression checks
-
-`npm run test:layout` uses the stored real player pool and a separate headless Chromium browser.
-The browser harness loads built production fonts when available; roster checks also exercise fallback fonts.
-It checks the desktop layout boundary and all four phone tabs with Giannis details open and closed.
-At 390×667 and 390×844, each selected tab keeps at least 100 pixels of scroll space.
-Player information scrolls inside the auction block while the normal bid controls remain visible.
+Use `AUCTION_NEXT_DEV=1` for bounded local Next development during Safari and WebKit checks.
+Safari verification attempts a standalone WebDriver window. If unsupported, evidence labels the separate layout check as emulated standalone.
+Only owned sessions and servers close. The runner does not touch existing Safari windows.

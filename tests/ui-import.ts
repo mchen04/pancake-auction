@@ -12,7 +12,7 @@ import { buildPool } from '../lib/import-data';
 import { safeError } from '../scripts/env';
 import { importFixture } from './import-fixture';
 import {
-    createIsolated, dropIsolated, seedManagers, seedPlayers, sleep, configure, currentBackend, getState
+    createIsolated, dropIsolated, seedManagers, seedPlayers, sleep, configure, currentBackend, getState, claimSeat, act
 } from './support';
 
 const session = `pancake-import-${randomBytes(6).toString('hex')}`;
@@ -74,9 +74,11 @@ async function main() {
         }
         assert(ready, 'The production room must start');
         await browser('open', base);
+        await browser('wait', '.seat-grid button');
         await browser('find', 'role', 'button', 'click', '--name', 'Michael');
         await browser('wait', '.room');
         assert.equal(await visible('.me', 'Michael'), true);
+        const otherTokens = await Promise.all(Array.from({ length: 9 }, (_, index) => claimSeat(index + 2)));
         const playerId = 'review-added';
         const name = 'Review Added Player';
         raw[0][playerId] = { ...raw[0]['1000'], player_id: playerId, full_name: name };
@@ -116,10 +118,10 @@ async function main() {
             await browser('wait', '.room');
             assert.equal(await visible('.block', name), true);
         }
-        if (state.lot!.highBidderId !== 1) await browser('click', '.bid-buttons > button:first-child');
-        assert.equal(await visible('.high-bid', 'You lead'), true);
-        await browser('find', 'role', 'button', 'click', '--name', 'Force end', '--exact');
-        await browser('click', '.commish .armed');
+        await browser('fill', '[aria-label="Sealed bid amount"]', '2');
+        await browser('click', '.sealed-form .primary');
+        assert.equal(await visible('.own-response', '$2'), true);
+        await Promise.all(otherTokens.map(token => act({ type: 'pass', lotId: state.lot!.id }, token)));
         receipt.winningRosterVisible = await visible('.roster', name);
         state = await getState();
         assert(state.roster.some(entry => entry.playerId === playerId && entry.managerId === 1));

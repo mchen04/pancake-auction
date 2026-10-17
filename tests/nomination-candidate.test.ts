@@ -45,12 +45,12 @@ describe('C21 deterministic timeout nominee', () => {
             { ...state.players[1], id: 'new-wing', positions: ['SF'], projection: 1 }];
         expect(timeoutNominee(state, state.managers[0])?.id).toBe('new-wing');
     });
-    it('passes reserve-only timeouts while legal optional nominations remain available', () => {
+    it('nominates legal reserve-only players until explicit Done', () => {
         const state = roomFixture();
         state.roster = state.players.slice(0, 20).map((player, index) => ({ playerId: player.id,
             managerId: 1, placement: 'active', price: 1, lotId: index + 1 }));
         expect(canNominate(state, state.managers[0])).toBe(true);
-        expect(timeoutNominee(state, state.managers[0])).toBeUndefined();
+        expect(timeoutNominee(state, state.managers[0])?.id).toBe(state.players[20].id);
         state.managers[0].done = true;
         expect(timeoutNominee(state, state.managers[0])).toBeUndefined();
     });

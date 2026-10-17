@@ -1,23 +1,14 @@
 import { createRoot } from 'react-dom/client';
-import { useEffect, useState } from 'react';
-import { useQuery } from 'convex/react';
 import { AuctionProvider } from '../app/provider';
-import { api } from '../convex/_generated/api';
 import Room from '../app/page';
 
 const NativeSocket = window.WebSocket;
 const mode = new URL(location.href).searchParams.get('case');
 const config = (window as unknown as { roomConfig: { url: string; token: string } }).roomConfig;
 const control = { sockets: [] as ControlledSocket[], poolHeld: false, holdPools: mode === 'cold',
-    blocked: false, syncCalls: 0, cachedTimes: [] as number[], ready: false };
+    blocked: false, ready: false };
 Object.assign(window, { transport: control });
 localStorage.setItem('pancake-seat', config.token);
-const nativeFetch = window.fetch.bind(window);
-window.fetch = (input, init) => {
-    if (typeof init?.body === 'string' && JSON.parse(init.body).path === 'auction:syncTime') control.syncCalls++;
-    return nativeFetch(input, init);
-};
-
 class ControlledSocket extends EventTarget {
     static CONNECTING = 0;
     static OPEN = 1;
@@ -49,8 +40,6 @@ class ControlledSocket extends EventTarget {
         }, delay);
     }
     send(data: string) {
-        const message = JSON.parse(data);
-        if (message.type === 'Mutation' && message.udfPath === 'auction:syncTime') control.syncCalls++;
         this.socket!.send(data);
     }
     close(code?: number, reason?: string) {
@@ -70,8 +59,6 @@ class ControlledSocket extends EventTarget {
                 if (update.type !== 'QueryUpdated') continue;
                 if (update.value?.draft) {
                     stateUpdate = true;
-                    if (mode === 'stale') update.value.serverNow -= 60000;
-                    control.cachedTimes.push(update.value.serverNow);
                 }
                 if (update.value?.players?.length && update.value.revision) pool = true;
             }
@@ -90,16 +77,6 @@ class ControlledSocket extends EventTarget {
     }
 }
 window.WebSocket = ControlledSocket as unknown as typeof WebSocket;
-function CachedClockControl() {
-    const snapshot = useQuery(api.auction.state, { token: config.token });
-    const [offset, setOffset] = useState(0);
-    useEffect(() => { if (snapshot) setOffset(snapshot.serverNow - Date.now()); }, [snapshot]);
-    const [now, setNow] = useState(Date.now);
-    useEffect(() => { const timer=setInterval(()=>setNow(Date.now()),100); return ()=>clearInterval(timer); },[]);
-    const remaining = snapshot ? Math.max(0,(snapshot.draft.deadline ?? now)-now-offset)/1000 : 0;
-    return snapshot && <div className="legacy-clock"><span className="digits">
-        {remaining>=10?Math.ceil(remaining):remaining.toFixed(1)}</span></div>;
-}
 createRoot(document.getElementById('root')!).render(<AuctionProvider url={config.url}>
-    <Room />{mode === 'stale' && <CachedClockControl />}
+    <Room />
 </AuctionProvider>);

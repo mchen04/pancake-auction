@@ -6,12 +6,10 @@ export const action = v.union(
     v.object({ type: v.literal('resume'), expectedPause: v.optional(v.string()) }),
     v.object({ type: v.literal('undo'), lotId: v.number() }),
     v.object({ type: v.literal('done'), done: v.boolean(), nominationGeneration: v.optional(v.string()) }),
-    v.object({ type: v.literal('nominate'), playerId: v.string(), amount: v.number(),
+    v.object({ type: v.literal('nominate'), playerId: v.string(), amount: v.optional(v.number()),
         nominationGeneration: v.optional(v.string()) }),
     v.object({ type: v.literal('bid'), lotId: v.number(), amount: v.number() }),
     v.object({ type: v.literal('pass'), lotId: v.number() }),
-    v.object({ type: v.literal('force'), lotId: v.number(),
-        expectedHighBidderId: v.optional(v.number()), expectedHighBid: v.optional(v.number()) }),
     v.object({ type: v.literal('place'), playerId: v.string(), placement }),
     v.object({ type: v.literal('release'), managerId: v.number() })
 );
@@ -23,3 +21,13 @@ export const player = v.object({ id: v.string(), name: v.string(), position: v.s
     age: v.union(v.number(), v.null()), careerGames: v.union(v.number(), v.null()), careerGamesComplete: v.boolean(),
     projection: v.union(v.number(), v.null()), projectedStats: v.union(v.record(v.string(), v.number()), v.null()),
     adp: v.union(v.number(), v.null()) });
+
+export const response = v.object({ managerId: v.number(), amount: v.number(), automatic: v.optional(v.string()) });
+export const queueEntry = v.object({ id: v.string(), playerId: v.string(), amount: v.optional(v.number()),
+    reason: v.optional(v.string()) });
+export const queueAction = v.union(
+    v.object({ type: v.literal('add'), playerId: v.string(), amount: v.optional(v.number()) }),
+    v.object({ type: v.literal('remove'), id: v.string() }),
+    v.object({ type: v.literal('edit'), id: v.string(), amount: v.optional(v.number()) }),
+    v.object({ type: v.literal('reorder'), ids: v.array(v.string()) })
+);

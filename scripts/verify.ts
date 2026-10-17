@@ -1,9 +1,8 @@
 import { makeEvidenceDirectory as mkdir, writeEvidenceFile as writeFile } from './evidence';
 import { evidenceDirectory, repositoryDirectory } from "./evidence";
 import { spawn } from "node:child_process";
-import { readdir, statfs } from 'node:fs/promises';
+import { statfs } from 'node:fs/promises';
 import { safeError } from "./env";
-import { recordSpread } from "./simulation-results";
 async function main() {
     const started = Date.now();
     const root = evidenceDirectory(process.env.EVIDENCE_DIR, true)!;
@@ -17,40 +16,8 @@ async function main() {
     if (freeBytes < 1024 ** 3) {
         throw new Error(`Local verification needs 1 GiB of free disk; available ${freeBytes} bytes`);
     }
-    const commands = [
-        ["typecheck"],
-        ["lint"],
-        ["test"],
-        ["test:local"],
-        ["test:db"],
-        ["test:ui"],
-        ["test:volume"],
-        ["build"],
-        ["test:layout"],
-        ["test:room"],
-        [
-            "sim",
-            "--",
-            "--runs",
-            "3",
-            "--timing",
-            "fast",
-            "--seed",
-            "1042",
-            "--skip-build"
-        ],
-        [
-            "sim",
-            "--",
-            "--runs",
-            "1",
-            "--timing",
-            "real",
-            "--seed",
-            "2042",
-            "--skip-build"
-        ]
-    ];
+    const commands = [['typecheck'], ['lint'], ['test'], ['test:local'], ['test:db'],
+        ['test:volume'], ['build'], ['test:layout'], ['test:ui'], ['test:room']];
     const results: {
         command: string;
         exitCode: number;
@@ -87,9 +54,6 @@ async function main() {
             throw new Error(`Verification failed; see ${path}`);
         }
     }
-    const summaries = (await readdir(`${dir}/sim`)).filter(file => /^run-.*\.json$/.test(file));
-    const spread = await recordSpread(summaries.map(file => `${dir}/sim/${file}`), true);
-    await writeFile(`${dir}/seed-spread.json`, JSON.stringify(spread, null, 2));
     await writeFile(`${dir}/duration.json`, JSON.stringify({ elapsedMs: Date.now() - started }, null, 2));
     console.log(`All checks passed. Results: ${dir}/results.json`);
 }

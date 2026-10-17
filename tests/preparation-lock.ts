@@ -109,7 +109,10 @@ async function main() {
                 for (const name of await readdir(cache)) {
                     if (!name.startsWith('prepare.lock.candidate-')) continue;
                     const path = `${cache}/${name}`;
-                    const owner = await readFile(`${path}/owner.json`, 'utf8').then(JSON.parse, () => null);
+                    const owner = await readFile(`${path}/owner.json`, 'utf8').then(JSON.parse, () => null).catch(error => {
+                        if (error instanceof SyntaxError) return null;
+                        throw error;
+                    });
                     if (owner?.pid === pid) return path;
                 }
                 await pause(10);
@@ -120,6 +123,17 @@ async function main() {
             const ancient = new Date(Date.now() - 48 * 60 * 60 * 1000);
             await utimes(path, ancient, ancient);
         };
+        await check('Candidate inspection waits for a complete owner record', async cache => {
+            const path = `${cache}/prepare.lock.candidate-writing`;
+            await mkdir(path);
+            await writeFile(`${path}/owner.json`, '{"pid":');
+            const observed = candidateFor(cache, process.pid).then(path => ({ path }), error => ({ error: String(error) }));
+            await pause(100);
+            await writeFile(`${path}/owner.json`, JSON.stringify({ pid: process.pid }));
+            assert.deepEqual(await observed, { path });
+            await rm(path, { recursive: true });
+            return { partialWriteObserved: true, completeRecordAccepted: true };
+        });
         await check('C39 killed preparation waiter is swept on successful acquisition', async cache => {
             const owner = owned(cache); await until(owner.acquired);
             const waiter = owned(cache, 3000);

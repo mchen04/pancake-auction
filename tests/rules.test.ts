@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { counts, fantasyPoints, fits, legalPlacements, matching, maxBid, nextDeadline,
+import { counts, fantasyPoints, fits, legalPlacements, matching, maxBid,
     taxiEligibility } from "../lib/rules";
 import type { Entry, Player } from "../lib/types";
 const player: Player = {
@@ -147,11 +147,5 @@ describe("league rules", () => {
             positions: ["PG"] as Player["positions"]
         }));
         expect(maxBid(100, player, blocked, guards)).toBe(95);
-    });
-    it("adds five seconds with a fifteen-second cap, including near deadline", () => {
-        expect(nextDeadline(10000, 0, 5000, 15000)).toBe(15000);
-        expect(nextDeadline(10000, 100, 5000, 15000)).toBe(15000);
-        expect(nextDeadline(10000, 9999, 5000, 15000)).toBe(15000);
-        expect(nextDeadline(20000, 1000, 5000, 15000)).toBe(16000);
     });
 });

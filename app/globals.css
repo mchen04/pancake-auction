@@ -10,7 +10,6 @@
   --court: #1f4fc4;
   --court-dark: #173d99;
   --court-tint: #e7eefc;
-  --clock-bg: #0d1219;
   --amber: #ffb21e;
   --red: #d9362b;
   --lead: #0b7d55;
@@ -114,7 +113,7 @@ input {
   text-transform: uppercase;
   white-space: nowrap;
 }
-.num, .digits, .high-bid strong {
+.num, .high-bid strong {
   font-variant-numeric: tabular-nums;
 }
 
@@ -124,10 +123,10 @@ input {
   gap: 10px;
   padding: 0 10px 10px;
   grid-template-columns: minmax(440px, 1.35fr) minmax(440px, 1.15fr) minmax(300px, .85fr);
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, auto) minmax(120px, 1fr);
   grid-template-areas:
     "top top top"
-    "pool block roster"
+    "queue block roster"
     "pool teams roster"
     "pool results roster";
 }
@@ -208,6 +207,7 @@ input {
   overflow: hidden;
 }
 .pool { grid-area: pool; }
+.queue { grid-area: queue; }
 .block { grid-area: block; }
 .teams { grid-area: teams; }
 .roster { grid-area: roster; }
@@ -305,7 +305,7 @@ input {
   column-gap: 6px;
   padding: 0 10px;
 }
-.nominating .pool-grid {
+.with-action .pool-grid {
   grid-template-columns: minmax(0, 1fr) 62px 30px 40px 40px 36px 74px;
 }
 .blocked {
@@ -536,64 +536,6 @@ input {
   text-align: center;
   font-weight: 600;
 }
-.opening button {
-  width: 32px;
-  padding: 5px 0;
-}
-
-.shot-clock {
-  position: relative;
-  flex: none;
-  width: 132px;
-  height: 112px;
-  border-radius: 8px;
-  background: var(--clock-bg);
-  color: var(--amber);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  box-shadow: inset 0 0 0 3px #1c2531;
-}
-.shot-clock .digits {
-  font-family: var(--font-display), sans-serif;
-  font-weight: 700;
-  font-size: 58px;
-  line-height: 1;
-  text-shadow: 0 0 14px rgba(255, 178, 30, .45);
-}
-.shot-clock .caption {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 1.4px;
-  color: #8a96a8;
-  margin-top: 4px;
-}
-.shot-clock .drain {
-  position: absolute;
-  left: 0;
-  bottom: 0;
-  height: 4px;
-  background: var(--amber);
-  transition: width .1s linear;
-}
-.shot-clock.urgent {
-  color: #ff5a4a;
-}
-.shot-clock.urgent .digits {
-  text-shadow: 0 0 16px rgba(255, 90, 74, .6);
-}
-.shot-clock.urgent .drain {
-  background: #ff5a4a;
-}
-.shot-clock.frozen {
-  color: #8a96a8;
-}
-.shot-clock.frozen .digits {
-  text-shadow: none;
-}
 .block.bidding .details {
   border-radius: var(--radius);
   border: 0;
@@ -602,87 +544,8 @@ input {
   display: grid;
   gap: 6px;
 }
-.pinned-lead {
-  display: none;
-  align-items: baseline;
-  gap: 8px;
-  font-weight: 600;
-}
-.pinned-lead strong {
-  font-family: var(--font-display), sans-serif;
-  font-size: 22px;
-  line-height: 1;
-}
-.shot-clock.compact {
-  width: auto;
-  height: auto;
-  min-width: 64px;
-  margin-left: auto;
-  padding: 4px 8px 6px;
-  flex-direction: row;
-  align-items: baseline;
-  gap: 6px;
-  border-radius: 6px;
-}
-.shot-clock.compact .digits {
-  font-size: 22px;
-}
-.shot-clock.compact .caption {
-  margin-top: 0;
-  font-size: 9px;
-  letter-spacing: .8px;
-}
-.shot-clock.compact .drain {
-  height: 3px;
-}
 .position-select, .turn-inline {
   display: none;
-}
-.bid-buttons {
-  display: flex;
-  gap: 6px;
-}
-.bid-buttons > button, .custom > * {
-  height: 40px;
-  white-space: nowrap;
-}
-.bid-buttons .primary {
-  min-width: 74px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  line-height: 1.1;
-}
-.bid-buttons .step {
-  font-size: 15px;
-  font-weight: 700;
-}
-.bid-buttons .step + span {
-  font-size: 11px;
-  opacity: .85;
-}
-.custom {
-  display: flex;
-  gap: 0;
-  flex: 1;
-  min-width: 110px;
-}
-.custom input {
-  flex: 1;
-  width: 0;
-  border-radius: var(--radius) 0 0 var(--radius);
-  font-weight: 600;
-}
-.custom button {
-  border-radius: 0 var(--radius) var(--radius) 0;
-  padding: 0 14px;
-}
-.bid-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
 }
 .bid-note {
   color: var(--muted);
@@ -1005,27 +868,10 @@ input {
   font-size: 11px;
 }
 
-@media (max-height: 800px) and (min-width: 1220px) {
-  .room {
-    grid-template-rows: auto auto minmax(0, 1fr) minmax(0, 1fr);
-    grid-template-areas:
-      "top top top"
-      "pool block roster"
-      "pool teams roster"
-      "pool teams results";
-  }
-}
 @media (max-height: 760px) {
   .block {
     padding: 10px 12px;
     gap: 8px;
-  }
-  .shot-clock {
-    height: 96px;
-    width: 116px;
-  }
-  .shot-clock .digits {
-    font-size: 48px;
   }
   .high-bid strong {
     font-size: 36px;
@@ -1083,22 +929,19 @@ input {
     background: var(--ink);
     color: #fff;
   }
-  .tabbar button:nth-child(2) {
+  .tabbar .tab-teams {
     display: none;
   }
-  .pool, .roster, .results {
+  .pool, .roster, .results, .queue {
     grid-area: panel;
     display: none;
   }
   .roster .panel-head h2 {
     display: none;
   }
-  .small, .segmented button, .placement button, .tabbar button, .opening button, .opening input, .nominate,
-  .pool-filters input {
+  .small, .segmented button, .placement button, .tabbar button, .opening input, .nominate, .queue-quick,
+  .pool-filters input, .queue-row button, .queue-row input {
     min-height: 40px;
-  }
-  .opening button {
-    width: 40px;
   }
   .link {
     padding: 10px 0;
@@ -1112,6 +955,7 @@ input {
   }
   .room[data-tab="players"] .pool,
   .room[data-tab="teams"] .pool,
+  .room[data-tab="queue"] .queue,
   .room[data-tab="roster"] .roster,
   .room[data-tab="results"] .results {
     display: flex;
@@ -1126,7 +970,7 @@ input {
     gap: 8px;
     padding: 0 8px 8px;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, auto) auto minmax(240px, 1fr);
+    grid-template-rows: auto auto auto minmax(56px, 1fr);
     grid-template-areas: "top" "block" "tabs" "panel";
   }
   .topbar {
@@ -1166,13 +1010,13 @@ input {
   .tabbar button {
     padding: 8px 0;
   }
-  .tabbar button:nth-child(2) {
+  .tabbar .tab-teams {
     display: block;
   }
   .phone-only {
     display: revert;
   }
-  .pool, .teams, .roster, .results {
+  .pool, .teams, .roster, .results, .queue {
     grid-area: panel;
     display: none;
   }
@@ -1180,6 +1024,7 @@ input {
     display: none;
   }
   .room[data-tab="players"] .pool,
+  .room[data-tab="queue"] .queue,
   .room[data-tab="teams"] .teams,
   .room[data-tab="roster"] .roster,
   .room[data-tab="results"] .results {
@@ -1198,18 +1043,6 @@ input {
   .block-information > * {
     flex: none;
   }
-  .pinned-lead {
-    display: flex;
-    flex-wrap: wrap;
-  }
-  .pinned-lead strong {
-    font-size: 24px;
-  }
-  .pinned-lead small {
-    color: var(--faint);
-    font-weight: 500;
-    font-size: 12px;
-  }
   .block-information .high-bid {
     display: none;
   }
@@ -1221,36 +1054,24 @@ input {
   .block > .bid-controls, .block > .last-win {
     flex: none;
   }
-  .shot-clock {
-    width: 92px;
-    height: 84px;
-  }
-  .shot-clock .digits {
-    font-size: 40px;
-  }
   .lot-heading h2, .nomination h2 {
     font-size: 23px;
+  }
+  .lot-heading .link {
+    min-height: 44px;
+    padding: 0 6px;
   }
   .high-bid strong {
     font-size: 30px;
   }
-  .bid-buttons {
-    flex-wrap: wrap;
-  }
-  .bid-buttons > .custom {
-    flex-basis: 100%;
-  }
-  .bid-buttons > .primary {
-    flex: 1;
-  }
   .pool-grid {
     grid-template-columns: minmax(0, 1fr) 46px 28px 38px 38px;
   }
-  .nominating .pool-grid {
-    grid-template-columns: minmax(0, 1fr) 56px 24px 34px 34px 62px;
+  .with-action .pool-grid {
+    grid-template-columns: minmax(0, 1fr) 50px 24px 34px 34px 64px;
     column-gap: 4px;
   }
-  .nominate {
+  .nominate, .queue-quick {
     font-size: 11px;
   }
   .pool-grid > :nth-child(6) {
@@ -1281,9 +1102,6 @@ input {
     font-size: 11px;
     font-weight: 600;
     color: var(--muted);
-  }
-  .block.bidding .block-top > .shot-clock {
-    display: none;
   }
   .pool-filters {
     grid-template-columns: minmax(0, 1fr) 92px;
@@ -1339,14 +1157,540 @@ input {
   }
 }
 
-@media (max-width: 389px) and (max-height: 650px) {
+
+
+
+/* One-page room: identity, deadline, response state and actions stay on screen; only panels scroll. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.room {
+  padding-top: env(safe-area-inset-top);
+  padding-right: max(10px, env(safe-area-inset-right));
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
+  padding-left: max(10px, env(safe-area-inset-left));
+}
+.topbar {
+  margin-top: calc(-1 * env(safe-area-inset-top));
+  padding-top: env(safe-area-inset-top);
+  height: auto;
+  min-height: 48px;
+  box-sizing: content-box;
+}
+.toast {
+  top: calc(56px + env(safe-area-inset-top));
+  max-width: calc(100vw - 24px);
+}
+.topbar .headline {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.me-box {
+  flex: 0 1 auto;
+  margin-left: auto;
+  min-width: 0;
+  max-width: 220px;
+  text-align: right;
+  line-height: 1.25;
+}
+.commish + .me-box {
+  margin-left: 6px;
+}
+.me-box .me {
+  margin: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.me-budget {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.badge {
+  display: inline-block;
+  min-width: 17px;
+  margin-left: 5px;
+  padding: 1px 5px;
+  border-radius: 9px;
+  background: var(--court);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 15px;
+  font-variant-numeric: tabular-nums;
+}
+.tabbar [aria-selected="true"] .badge {
+  background: #fff;
+  color: var(--ink);
+}
+
+/* Current player / decision card */
+.block {
+  min-height: 0;
+}
+.deadline {
+  flex: none;
+  padding: 2px 0 0;
+  min-width: 104px;
+  text-align: right;
+  font-size: 13px;
+}
+.deadline time {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+.lot-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.lock {
+  flex: none;
+  color: var(--court);
+}
+.responses {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.response-count {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.response-dots {
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.response-dots li {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line);
+  background: var(--panel);
+}
+.response-dots li.on {
+  border-color: var(--lead);
+  background: var(--lead);
+}
+.money {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  min-width: 0;
+}
+.money:focus-within {
+  outline: 2px solid var(--court);
+  outline-offset: 1px;
+}
+.money > span {
+  padding-left: 9px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.money input {
+  border: 0;
+  outline: 0;
+  width: 100%;
+  padding-left: 3px;
+  background: transparent;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.money:has(input:disabled) {
+  opacity: .45;
+}
+.sealed-form {
+  display: grid;
+  grid-template-columns: minmax(84px, 1fr) auto auto;
+  gap: 6px;
+}
+.sealed-form button, .sealed-form input {
+  min-height: 40px;
+}
+.sealed-form .primary {
+  padding: 0 14px;
+}
+.sealed-form .pass {
+  padding: 0 12px;
+}
+.bid-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+.bid-note strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+.own-response {
+  display: grid;
+  gap: 2px;
+  padding: 9px 11px;
+  border-radius: var(--radius);
+  background: var(--lead-tint);
+}
+.own-response p {
+  font-weight: 600;
+  color: var(--lead);
+}
+.own-response strong {
+  font-variant-numeric: tabular-nums;
+}
+.own-response small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.check {
+  color: var(--lead);
+  font-weight: 700;
+}
+.opening {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+}
+.opening .money {
+  width: 110px;
+}
+.opening input {
+  min-height: 36px;
+  text-align: left;
+}
+.opening > span {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 400;
+}
+.nomination-controls {
+  display: grid;
+  gap: 6px;
+}
+.nominate-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+.nominate-hint strong {
+  color: var(--ink);
+}
+.nomination.complete h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.last-result {
+  order: 4;
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.last-result span {
+  margin-right: 4px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.last-win + .last-result {
+  display: none;
+}
+
+/* Pool row actions */
+.queue-quick {
+  width: 100%;
+  padding: 3px 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--court-dark);
+  background: var(--panel);
+  border-color: #c9d6f4;
+}
+.queue-quick:hover:not(:disabled) {
+  background: var(--court-tint);
+  border-color: var(--court);
+}
+.queue-quick.queued:disabled {
+  opacity: 1;
+  color: var(--lead);
+  background: var(--lead-tint);
+  border-color: transparent;
+}
+
+/* Private queue panel */
+.queue .panel-head h2 {
+  font-variant-numeric: tabular-nums;
+}
+.queue .scroll {
+  container-type: inline-size;
+}
+.queue-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.queue-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  grid-template-areas: "rank name actions" ". amount amount";
+  align-items: center;
+  gap: 4px 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.queue-rank {
+  grid-area: rank;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.queue-name {
+  grid-area: name;
+  min-width: 0;
+  display: grid;
+}
+.queue-name strong {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.queue-reason {
+  color: #8a5a00;
+  font-size: 11px;
+}
+.queue-row form {
+  grid-area: amount;
+  display: flex;
+  gap: 6px;
+}
+.queue-row .money {
+  width: 104px;
+}
+.queue-row button {
+  padding: 3px 9px;
+  font-size: 12px;
+}
+.queue-actions {
+  grid-area: actions;
+  display: flex;
+  gap: 4px;
+}
+.queue-actions button {
+  min-width: 30px;
+}
+@container (min-width: 430px) {
+  .queue-row {
+    grid-template-columns: 18px minmax(0, 1fr) auto auto;
+    grid-template-areas: "rank name amount actions";
+  }
+}
+.queue-foot {
+  flex: none;
+  padding: 6px 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+}
+.queue .empty-note strong {
+  color: var(--ink);
+}
+.priority {
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+  line-height: 1.7;
+}
+.priority p {
+  color: var(--muted);
+  font-size: 12px;
+}
+.queue-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 12px;
+}
+.queue-add input {
+  width: 150px;
+}
+.queue-add span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.revealed-lot {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  line-height: 1.8;
+}
+.revealed-lot summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+/* Desktop: the queue sits beside the decision card and never drives the row height. */
+@media (min-width: 1220px) {
+  .queue {
+    contain: size;
+  }
+  .block {
+    min-height: 214px;
+  }
+}
+@media (display-mode: standalone) {
+  .room { height: 100dvh; }
+}
+html.emulated-standalone .room { height: 100dvh; }
+
+@media (max-width: 860px) {
   .room {
-    grid-template-rows: auto minmax(0, auto) auto minmax(200px, 1fr);
+    padding-right: max(8px, env(safe-area-inset-right));
+    padding-left: max(8px, env(safe-area-inset-left));
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+  .topbar {
+    min-height: 44px;
+  }
+  .topbar .commish button {
+    min-height: 44px;
+  }
+  .me-box {
+    max-width: 46%;
+  }
+  .deadline {
+    font-size: 12px;
+    min-width: 88px;
+  }
+  .block {
+    gap: 8px;
+  }
+  .block-information {
+    min-height: 44px;
+    max-height: max(44px, min(200px, 22dvh));
+  }
+  .commish + .me-box {
+    margin-left: auto;
+  }
+  .sealed-form {
+    grid-template-columns: minmax(70px, 1fr) auto auto;
+  }
+  .sealed-form .primary {
+    padding: 0 10px;
+  }
+  .sealed-form .pass {
+    padding: 0 9px;
+  }
+  .opening > span {
+    flex-basis: 100%;
+  }
+  .tabbar button {
+    padding: 8px 0;
+    min-width: 0;
+    white-space: nowrap;
+  }
+}
+@media (max-width: 389px) {
+  .tabbar button {
+    font-size: 12px;
+  }
+  .badge {
+    margin-left: 3px;
+    padding: 1px 4px;
+    min-width: 15px;
+  }
+  .sealed-form .primary {
+    font-size: 12px;
+  }
+}
+@media (max-width: 860px) and (max-height: 620px) {
+  .last-result, .last-win {
+    display: none;
+  }
+  .block {
+    padding: 8px 10px;
+  }
+  .topbar .wordmark {
+    font-size: 15px;
+  }
+}
+@media (max-width: 860px) and (max-height: 620px) {
+  .block-information {
+    max-height: 64px;
+  }
+  .block-information .player-line, .block-information .lot-status, .nomination > p {
+    display: none;
+  }
+}
+@media (max-width: 860px) and (min-width: 560px) and (max-height: 520px) {
+  .room {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-areas: "top top" "block tabs" "block panel";
+  }
+  .block {
+    align-self: stretch;
+  }
+  .block-information {
+    max-height: none;
+  }
+  .block-information .player-line, .block-information .lot-status {
+    display: flex;
+  }
+  .nomination > p {
+    display: block;
+  }
+}
+@media (max-width: 860px) and (max-height: 520px) {
+  .block-information .player-line {
+    display: none;
+  }
+  .topbar .headline {
+    display: none;
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .shot-clock .drain {
-    transition: none;
+/* Touch layouts: every control in the room is at least 44px tall (Apple's minimum hit target). */
+@media (max-width: 1219px) {
+  .room button, .room input, .room select, .room summary {
+    min-height: 44px;
+  }
+  .room .name-button {
+    min-height: 0;
+  }
+  .pool-row {
+    min-height: 44px;
+  }
+  .queue-actions button {
+    min-width: 44px;
+  }
+  .revealed-lot summary {
+    padding: 11px 0;
+  }
+  .revealed-lot {
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+  .toast button {
+    min-width: 44px;
+    min-height: 44px;
   }
 }

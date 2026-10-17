@@ -17,8 +17,7 @@ export async function checkLeague(inspect = () => runAdmin('admin:inspect')) {
             run.finishedAt && run.counts.pool > 0 && run.counts.pool === data.pool?.count
                 && run.revision === data.pool?.revision),
         setup: draft?.status === 'setup' && data.lots.length === 0,
-        timing: draft?.nominationMs === 10000 && draft?.biddingMs === 10000
-            && draft?.extensionMs === 5000 && draft?.capMs === 15000
+        timing: draft?.mode === 'sealed-v1' && draft?.nominationMs === 86400000 && draft?.biddingMs === 86400000
     };
     return { ready: Object.values(checks).every(Boolean), checks, imports: data.imports };
 }

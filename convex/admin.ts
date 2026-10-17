@@ -6,11 +6,12 @@ import { player } from './validators';
 
 export const managers = internalMutation({ args: {}, handler: async ctx => {
     const draft = await draftRecord(ctx);
-    if (draft && draft.value.status !== 'setup' || await ctx.db.query('lots').first()) {
+    if (draft && draft.value.status !== 'setup' || await ctx.db.query('lots').first() || await ctx.db.query('roster').first()) {
         throw new Error('Manager setup is forbidden once the draft starts');
     }
     if (!draft) await ctx.db.insert('drafts', { key: 'auction', value: initialDraft(), version: 0,
         nextLot: 1, nextEvent: 1 });
+    if (draft && draft.value.mode !== 'sealed-v1') await ctx.db.patch(draft._id, { value: initialDraft() });
     const existing = await ctx.db.query('managers').collect();
     for (const [index, manager] of leagueManagers.entries()) {
         const row = existing.find(row => row.id === index + 1);
@@ -26,7 +27,7 @@ export const importPlayers = internalMutation({ args: { players: v.array(player)
     startedAt: v.number(), sources: v.array(v.string()), counts: v.any(), coverage: v.any() },
 handler: async (ctx, args) => {
     const draft = await draftRecord(ctx);
-    if (draft && draft.value.status !== 'setup' || await ctx.db.query('lots').first()) {
+    if (draft && draft.value.status !== 'setup' || await ctx.db.query('lots').first() || await ctx.db.query('roster').first()) {
         throw new Error('Import is forbidden once the draft starts; there is no override');
     }
     if (!Number.isFinite(Date.parse(args.fetchedAt)) || new Set(args.players.map(p => p.id)).size !== args.players.length) {

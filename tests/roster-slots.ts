@@ -78,7 +78,7 @@ async function seed(mode: 'empty' | 'partial' | 'full') {
     await configure({ roster: entries, managers: [1,2].map(managerId => ({ id: managerId, done: false,
         budget: 1000 - entries.filter(entry => entry.managerId === managerId).length })),
         lot: { id, playerId: target.id, nominatorId: 3, highBidderId: 3, highBid: 10, status: 'open' },
-        draft: { status: 'paused', phase: 'bidding', order: [1,2,3,4,5,6,7,8,9,10], nominatorId: 3,
+        draft: { status: 'paused', phase: 'bidding', order: [1,2,3,4,5,6,7,8,9,10], tiePriority: [10,9,8,7,6,5,4,3,2,1], nominatorId: 3,
             turnIndex: 2, lotId: id, deadline: null, remainingMs: 10000, passedTurns: [] } });
     return getState();
 }
@@ -203,7 +203,8 @@ async function main() {
     }
     async function tab(name: string) {
         if (await evaluate<number>('innerWidth') < 1220) {
-            await browser('find', 'role', 'tab', 'click', '--name', name, '--exact');
+            if (name === 'Queue') await browser('click', '.tabbar .tab-queue');
+            else await browser('find', 'role', 'tab', 'click', '--name', name, '--exact');
         }
     }
     async function inspectTeam(id: number, key = 'Enter') {
@@ -305,7 +306,7 @@ async function main() {
             if (width <= 860) await tab('Teams');
             if (expanded) await inspectTeam(2);
             const tabs = width >= 1220 ? ['All']
-                : width <= 860 ? ['Teams','Players','My roster','Results'] : ['Players','My roster','Results'];
+                : width <= 860 ? ['Teams','Players','Queue','My roster','Results'] : ['Players','Queue','My roster','Results'];
             for (const selected of tabs) {
                 if (selected !== 'All') await tab(selected);
                 const panels = await evaluate<(typeof layouts)[number]['panels']>(`(() => {
@@ -331,7 +332,7 @@ async function main() {
         for (const expanded of [false, true]) {
             const panels = layouts.filter(layout => layout.expanded === expanded).flatMap(layout => layout.panels);
             assert.deepEqual([...new Set(panels.map(panel => panel.name))].sort(),
-                ['Players','Teams','My roster','Results', ...(expanded ? ['inspected roster'] : [])].sort());
+                ['Players','My queue','Teams','My roster','Results', ...(expanded ? ['inspected roster'] : [])].sort());
             for (const panel of panels) {
                 assert(panel.clientWidth > 0, `${panel.name} must be visible for its width check`);
                 assert(panel.scrollWidth <= panel.clientWidth,
@@ -467,7 +468,7 @@ async function main() {
                         await browser('press', 'Enter');
                         await until(`!document.querySelector(${JSON.stringify(selector)})`);
                         assert.equal((await getState()).managers[1].claimed, false);
-                        memberToken = await claimSeat(2);
+                        memberToken = tokens[1] = await claimSeat(2);
                         return proof;
                     });
             }
@@ -622,14 +623,16 @@ async function main() {
             assert.deepEqual(changes.map(event => event.data.to).reverse(), ['taxi','ir','active']);
             return { changes };
         });
-        await check('A fresh public Force sale scrolls to and highlights the replacement slot', async () => {
+        await check('A fresh sealed sale scrolls to and highlights the replacement slot', async () => {
             const state = await seed('partial');
             const id = state.roster.length + 1;
             await configure({ lot: { id, playerId: freshPlayer.id, nominatorId: 2, highBidderId: 1,
                 highBid: 4, status: 'open' }, draft: { lotId: id } });
             await open(); await tab('My roster');
             await browser('scroll', 'down', '2000', '--selector', '.roster .scroll');
-            await act({ type: 'force', lotId: id, expectedHighBidderId: 1, expectedHighBid: 4 }, token);
+            await act({ type: 'resume' }, token);
+            await act({ type: 'bid', lotId: id, amount: 4 }, token);
+            await Promise.all(tokens.slice(1).map(token => act({ type: 'pass', lotId: id }, token)));
             await until(`!!document.querySelector('#roster-${id}.fresh')`);
             const proof = await evaluate<{ visible: boolean; scrollTop: number; background: string }>(`(() => {
                 const row=document.querySelector('#roster-${id}');const scroll=document.querySelector('.roster .scroll');
