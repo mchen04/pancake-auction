@@ -1,7 +1,8 @@
+import { action } from '../convex/validators';
 import { expireDraft } from '../convex/auction';
 import { v } from 'convex/values';
 import { internalMutation, internalQuery } from '../convex/_generated/server';
-import { draftRecord, initialDraft, load, Store, tokenHash } from '../convex/engine';
+import { act, draftRecord, initialDraft, load, Store, tokenHash } from '../convex/engine';
 import type { Draft, Entry } from '../lib/types';
 
 export const queryFailure = internalMutation({ args: { enabled: v.boolean() }, handler: async (ctx, args) => {
@@ -125,4 +126,10 @@ export const legacy = internalMutation({ args: {
         await ctx.db.insert('events', { id: 1, type: 'bid', managerId: 1, lotId: 1, data: { amount: 73 }, at: Date.now() });
     }
     await ctx.db.replace(record._id, { key: 'auction', value, version: 0, nextLot: 1, nextEvent: 1 });
+} });
+
+export const expiredAction = internalMutation({ args: { token: v.string(), action }, handler: async (ctx, args) => {
+    const record = (await draftRecord(ctx))!;
+    await ctx.db.patch(record._id, { value: { ...record.value, deadline: Date.now() - 1 } });
+    return act(ctx, args.action, args.token);
 } });

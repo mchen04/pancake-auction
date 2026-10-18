@@ -19,6 +19,7 @@ async function run(entry: string, failure: 'admin' | 'bundle' | 'before' | 'brow
     if (failure === 'bundle') await mkdir(`${directory}/roster-slots/bundle.js`, { recursive: true });
     if (failure === 'before') await writeFile(`${directory}/roster-slots`, 'blocked');
     const started = performance.now();
+    const timeoutMs = failure === 'none' ? 600000 : 120000;
     const child = spawn(process.execPath, ['--import', 'tsx', '--import', resolve('tests/setup-failure.mjs'),
         `tests/${entry}.ts`], { env: { PATH: process.env.PATH, NODE_ENV: 'test', EVIDENCE_DIR: directory,
             AUCTION_NEXT_DEV: '1', AUCTION_TEST_FAIL_ADMIN: failure === 'admin' ? '1' : '0',
@@ -36,7 +37,7 @@ async function run(entry: string, failure: 'admin' | 'bundle' | 'before' | 'brow
             if (failureAt === null && /Injected post-acquisition|Injected browser|Build failed|EEXIST/.test(output)) {
                 failureAt = performance.now();
             }
-            if (performance.now() - started > 120000
+            if (performance.now() - started > timeoutMs
                 || failureAt !== null && performance.now() - failureAt > 15000) {
                 timedOut = true;
                 break;

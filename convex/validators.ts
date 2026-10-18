@@ -1,15 +1,19 @@
 import { v } from 'convex/values';
 export const placement = v.union(v.literal('active'), v.literal('taxi'), v.literal('ir'));
+export const auctionMode = v.union(v.literal('sealed-v1'), v.literal('live-v1'));
 export const action = v.union(
+    v.object({ type: v.literal('mode'), mode: auctionMode }),
     v.object({ type: v.literal('start') }),
+    v.object({ type: v.literal('force'), lotId: v.number(),
+        expectedHighBidderId: v.optional(v.number()), expectedHighBid: v.optional(v.number()) }),
     v.object({ type: v.literal('pause'), expectedRunning: v.optional(v.string()) }),
     v.object({ type: v.literal('resume'), expectedPause: v.optional(v.string()) }),
     v.object({ type: v.literal('undo'), lotId: v.number() }),
     v.object({ type: v.literal('done'), done: v.boolean(), nominationGeneration: v.optional(v.string()) }),
-    v.object({ type: v.literal('nominate'), playerId: v.string(), amount: v.optional(v.number()),
+    v.object({ type: v.literal('nominate'), mode: v.optional(auctionMode), playerId: v.string(), amount: v.optional(v.number()),
         nominationGeneration: v.optional(v.string()) }),
-    v.object({ type: v.literal('bid'), lotId: v.number(), amount: v.number() }),
-    v.object({ type: v.literal('pass'), lotId: v.number() }),
+    v.object({ type: v.literal('bid'), mode: v.optional(auctionMode), lotId: v.number(), amount: v.number() }),
+    v.object({ type: v.literal('pass'), mode: v.optional(auctionMode), lotId: v.number() }),
     v.object({ type: v.literal('place'), playerId: v.string(), placement }),
     v.object({ type: v.literal('release'), managerId: v.number() })
 );
@@ -31,3 +35,5 @@ export const queueAction = v.union(
     v.object({ type: v.literal('edit'), id: v.string(), amount: v.optional(v.number()) }),
     v.object({ type: v.literal('reorder'), ids: v.array(v.string()) })
 );
+
+export type WireAction = import('convex/values').Infer<typeof action>;

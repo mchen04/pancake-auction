@@ -1,6 +1,8 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useConvexConnectionState } from 'convex/react';
+import { useClockOffset } from './use-clock-offset';
+import { isAuctionMode } from '../lib/modes';
 import { api } from '../convex/_generated/api';
 import {
   BlockPanel, CommissionerBar, dollars, PoolPanel, QueuePanel, ResultsPanel, RosterPanel, TeamsPanel, turnsUntil
@@ -17,7 +19,7 @@ function headline(state: AuctionState, me: Manager, privateSeat: PrivateState | 
   if (d.status === 'paused') return me.commissioner ? 'Paused' : 'Paused by the commissioner';
   if (d.status === 'complete') return 'Draft complete';
   if (d.status !== 'running') return '';
-  if (state.lot && privateSeat?.lotId === state.lot.id) {
+  if (d.mode === 'sealed-v1' && state.lot && privateSeat?.lotId === state.lot.id) {
     return privateSeat.response ? 'Response sent · sealed' : 'Your sealed bid is open';
   }
   const turns = turnsUntil(state, me);
@@ -36,14 +38,18 @@ export default function Room() {
   const [pendingControl, setPendingControl] = useState<'pause' | 'resume' | null>(null);
   const [tab, setTab] = useState<Tab>('players');
   const [opening, setOpening] = useState<number | undefined>();
+  const [openingSubmission, setOpeningSubmission] = useState(0);
   const [turnSeen, setTurnSeen] = useState('');
   const pending = useRef(false);
   const claim = useMutation(api.auction.claimSeat);
   const restore = useMutation(api.auction.restoreSeat);
   const mutate = useMutation(api.auction.actOnDraft);
   const queueMutation = useMutation(api.auction.editQueue);
-  const privateSeat = useQuery(api.auction.privateSeat, token ? { token } : 'skip');
   const snapshot = useQuery(api.auction.state, ready ? { token } : 'skip');
+  const auctionMode = snapshot?.draft.mode;
+  const normal = auctionMode === 'live-v1';
+  const clock = useClockOffset(connected, connection.connectionCount, normal);
+  const privateSeat = useQuery(api.auction.privateSeat, token && !normal ? { token } : 'skip');
   const pool = useQuery(api.auction.pool, snapshot ? { revision: snapshot.poolRevision } : 'skip');
   const [loadedPool, setLoadedPool] = useState<{ revision: string; players: Player[] }>();
   if (pool && pool.revision === snapshot?.poolRevision && pool !== loadedPool) setLoadedPool(pool);
@@ -93,11 +99,14 @@ export default function Room() {
     setError('');
     if ('type' in body && body.type === 'nominate') {
       setOpening(body.amount);
+      setOpeningSubmission(value => value + 1);
     }
     try {
       const result = endpoint === 'claim' && 'managerId' in body
         ? await claim({ managerId: body.managerId })
-        : 'type' in body ? await mutate({ token: token || '', action: body }) : null;
+        : 'type' in body ? await mutate({ token: token || '', action:
+          (body.type === 'bid' || body.type === 'pass' || body.type === 'nominate') && auctionMode
+            ? { ...body, mode: auctionMode } : body }) : null;
       if (!result) throw new Error('Invalid action');
       if (!result.ok) throw new Error(result.error);
       if (typeof result.value === 'string') {
@@ -111,7 +120,7 @@ export default function Room() {
       setPendingControl(null);
       pending.current = false;
     }
-  }, [claim, mutate, token]);
+  }, [claim, mutate, token, auctionMode]);
 
   if (!state) {
     return <main className="gate"><h1 className="wordmark">Pancake Auction</h1>
@@ -144,7 +153,7 @@ export default function Room() {
     );
   }
   const d = state.draft;
-  if (d.mode !== 'sealed-v1' && d.status !== 'setup') return <main className="gate"><h1 className="wordmark">Pancake Auction</h1>
+  if (!isAuctionMode(d.mode) && d.status !== 'setup') return <main className="gate"><h1 className="wordmark">Pancake Auction</h1>
     <p>Legacy draft is read-only. Commissioner migration is required.</p></main>;
   const turnKey = (d.status === 'running' || d.status === 'paused')
     && d.phase === 'nomination' && d.nominatorId === me.id
@@ -152,7 +161,7 @@ export default function Room() {
   if (turnKey && turnKey !== turnSeen) {
     setTurnSeen(turnKey);
     setTab('players');
-    setOpening(undefined);
+    setOpening(normal ? 1 : undefined);
   }
   const editQueue = async (action: QueueAction) => {
     if (pending.current) return;
@@ -170,15 +179,19 @@ export default function Room() {
     setTab('players');
     setOpening(undefined);
   };
-  const props = { state, me, busy, connected, send, privateSeat, editQueue };
+  const props = { state, me, busy, connected, send, privateSeat, editQueue, clockSample: clock.sample, openingSubmission };
   const mine = counts(state.roster.filter(entry => entry.managerId === me.id));
   const queued = privateSeat?.queue.length ?? 0;
+  const activeTab = normal && tab === 'queue' ? 'players' : tab;
   return (
-    <main className="room" data-tab={tab} data-busy={busy || undefined}>
+    <main className="room" data-tab={activeTab} data-busy={busy || undefined} data-mode={d.mode} data-clock-status={normal ? clock.status : undefined}>
       <header className="topbar">
         <h1 className="wordmark">Pancake Auction</h1>
         <p className={`headline ${state.draft.status}`}>{headline(state, me, privateSeat)}</p>
         {!connected && <p className="offline" id="room-connection-status" role="status">Reconnecting…</p>}
+        {normal && (clock.status === 'syncing' || clock.status === 'retrying') && <p className="offline clock-status" role="status">
+          {clock.status === 'retrying' ? 'Clock not synced. Retrying…' : 'Syncing clock…'}
+        </p>}
         {me.commissioner && <CommissionerBar {...props} pendingControl={pendingControl} />}
         <button className="me-box" title="Switch manager" onClick={switchManager}>
           <span className="me">{me.name}<svg className="me-switch" width="9" height="10" viewBox="0 0 9 10"
@@ -191,14 +204,14 @@ export default function Room() {
       {error && <div className="toast" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss">×</button></div>}
       <BlockPanel {...props} opening={opening} setOpening={setOpening} />
       <nav className="tabbar" role="tablist">
-        {tabs.map(([value, label]) => (
-          <button key={value} role="tab" className={`tab-${value}`} aria-selected={tab === value} onClick={() => setTab(value)}
+        {tabs.filter(([value]) => !normal || value !== 'queue').map(([value, label]) => (
+          <button key={value} role="tab" className={`tab-${value}`} aria-selected={activeTab === value} onClick={() => setTab(value)}
             aria-label={value === 'queue' ? `Queue, ${queued} queued` : undefined}>
             {label}{value === 'queue' && queued > 0 && <span className="badge" aria-hidden="true">{queued}</span>}
           </button>
         ))}
       </nav>
-      <QueuePanel {...props} />
+      {!normal && <QueuePanel {...props} />}
       <PoolPanel {...props} opening={opening} />
       <TeamsPanel {...props} />
       <RosterPanel {...props} />

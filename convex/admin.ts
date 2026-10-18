@@ -2,6 +2,7 @@ import { v } from 'convex/values';
 import { internalMutation, internalQuery } from './_generated/server';
 import { draftRecord, initialDraft } from './engine';
 import { leagueManagers } from '../lib/league';
+import { eventMarker } from '../lib/modes';
 import { player } from './validators';
 
 export const managers = internalMutation({ args: {}, handler: async ctx => {
@@ -11,7 +12,7 @@ export const managers = internalMutation({ args: {}, handler: async ctx => {
     }
     if (!draft) await ctx.db.insert('drafts', { key: 'auction', value: initialDraft(), version: 0,
         nextLot: 1, nextEvent: 1 });
-    if (draft && draft.value.mode !== 'sealed-v1') await ctx.db.patch(draft._id, { value: initialDraft() });
+    if (draft && draft.value.mode === undefined) await ctx.db.patch(draft._id, { value: initialDraft() });
     const existing = await ctx.db.query('managers').collect();
     for (const [index, manager] of leagueManagers.entries()) {
         const row = existing.find(row => row.id === index + 1);
@@ -47,7 +48,7 @@ export const release = internalMutation({ args: { name: v.string() }, handler: a
     await ctx.db.patch(manager._id, { tokenHash: null });
     const draft = await draftRecord(ctx);
     if (draft) {
-        await ctx.db.insert('events', { id: draft.nextEvent, type: 'release', managerId: null, lotId: null,
+        await ctx.db.insert('events', { ...eventMarker(draft.value.mode), id: draft.nextEvent, type: 'release', managerId: null, lotId: null,
             data: { managerId: manager.id, now: Date.now() }, at: Date.now() });
         await ctx.db.patch(draft._id, { nextEvent: draft.nextEvent + 1 });
     }

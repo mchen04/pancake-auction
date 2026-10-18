@@ -10,7 +10,7 @@ const body = IBM_Plex_Sans({ subsets: ['latin'], weight: ['400', '500', '600'], 
 
 export const metadata: Metadata = {
   title: 'Pancake Auction',
-  description: 'Sealed-bid auction room for the Pancake dynasty league',
+  description: "Pancake dynasty league auction room",
   appleWebApp: { capable: true, title: 'Pancake Auction', statusBarStyle: 'default' },
   icons: {
     icon: [{ url: '/favicon.ico', sizes: '16x16 32x32 48x48' }, { url: '/icon.svg', type: 'image/svg+xml' },

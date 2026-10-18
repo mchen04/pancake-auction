@@ -114,7 +114,7 @@ async function main() {
     evidence.origin = origin;
     evidence.servers = ports;
 
-    const cache = `${homedir()}/Library/Caches/ms-playwright`;
+    const cache = process.env.PLAYWRIGHT_BROWSERS_PATH || `${homedir()}/Library/Caches/ms-playwright`;
     const webkitBuild = (await readdir(cache)).filter(name => name.startsWith('webkit-')).sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]))[0];
     assert(webkitBuild, 'A cached WebKit build is required');
     const browser = await webkit.launch({ executablePath: `${cache}/${webkitBuild}/pw_run.sh`, headless: true });

@@ -12,6 +12,7 @@ export function canNominate(state: AuctionState, manager: Manager | undefined): 
 export function timeoutNominee(state: AuctionState, manager: Manager | undefined): Player | undefined {
     if (!manager || manager.done) return undefined;
     const entries = state.roster.filter(entry => entry.managerId === manager.id);
+    if (state.draft.mode === 'live-v1' && counts(entries).active >= 20) return undefined;
     const sold = new Set(state.roster.map(entry => entry.playerId));
     return state.players.filter(player => !sold.has(player.id)).sort((a, b) =>
         (b.projection ?? -Infinity) - (a.projection ?? -Infinity) || a.id.localeCompare(b.id))
@@ -123,4 +124,8 @@ export function fantasyPoints(stats: Record<string, number>): number {
         const alias = key === "tpm" ? stats.fg3m : key === "to" ? stats.tov : undefined;
         return sum + (stats[key] ?? alias ?? 0) * weight;
     }, 0);
+}
+
+export function nextDeadline(deadline: number, now: number, extensionMs: number, capMs: number): number {
+    return Math.min(deadline + extensionMs, now + capMs);
 }

@@ -1,152 +1,15 @@
+import { sizes, geometry, assertOnePage } from './browser-layout';
+import { driver, mode, label, commands, watchClockRequests, type Driver } from './browser-driver';
 import assert from 'node:assert/strict';
-import { execFile, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
-import { readdir } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { webkit } from 'playwright-core';
+import { spawn } from 'node:child_process';
 import { AuctionClient } from '../lib/client';
 import { counts } from '../lib/rules';
 import { DAY } from '../lib/sealed';
 import { recordedPool } from '../scripts/pool-source';
 import { freePort, localBackend, sleep, stopProcess } from '../scripts/local-backend';
-import { withResources, ownProcess, ownCleanup, runBrowser } from '../scripts/resources';
+import { withResources, ownProcess } from '../scripts/resources';
 import { makeEvidenceDirectory, writeEvidenceFile } from '../scripts/evidence';
 
-interface Driver {
-    open(url: string): Promise<unknown>;
-    click(selector: string): Promise<unknown>;
-    fill(selector: string, text: string): Promise<unknown>;
-    evaluate<T = unknown>(expression: string): Promise<T>;
-    screenshot(path: string): Promise<unknown>;
-    resize(width: number, height: number): Promise<unknown>;
-    close(): Promise<unknown>;
-    standalone?(): Promise<unknown>;
-    form?(kind: 'phone' | 'desktop'): Promise<unknown>;
-}
-const execute = promisify(execFile);
-const mode = process.env.AUCTION_BROWSER ?? 'chromium';
-const label = mode === 'safari' ? 'Desktop Safari' : mode === 'webkit' ? 'Playwright WebKit (not Safari)' : 'Chromium';
-const commands: { command: string; result?: unknown }[] = [];
-async function driver(): Promise<Driver> {
-    if (mode === 'safari') {
-        const port = await freePort();
-        const process_ = ownProcess(spawn('/usr/bin/safaridriver', ['--port', String(port)], { stdio: 'ignore' }));
-        commands.push({ command: `/usr/bin/safaridriver --port ${port}` });
-        const base = `http://127.0.0.1:${port}`;
-        for (let i = 0; i < 60; i++) {
-            try { if ((await fetch(`${base}/status`)).ok) break; } catch {}
-            await sleep(100);
-        }
-        async function request(method: string, path: string, body?: unknown) {
-            const response = await fetch(`${base}${path}`, { method, headers: { 'Content-Type': 'application/json' },
-                ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-            const result = await response.json();
-            if (!response.ok || result.value?.error) throw new Error(`Safari ${method} ${path.replace(/session\/[^/]+/, 'session/<owned>')}: ${JSON.stringify(result.value)}`);
-            return result.value;
-        }
-        commands.push({ command: 'POST /session {"capabilities":{"alwaysMatch":{"browserName":"safari"}}}' });
-        const session = await request('POST', '/session', { capabilities: { alwaysMatch: { browserName: 'safari' } } });
-        const prefix = `/session/${session.sessionId}`;
-        let closed = false;
-        const close = async () => {
-            if (closed) return;
-            closed = true;
-            try { await request('DELETE', prefix); } finally { await stopProcess(process_); }
-        };
-        ownCleanup(close);
-        async function element(selector: string) {
-            const result = await request('POST', `${prefix}/element`, { using: 'css selector', value: selector });
-            return result['element-6066-11e4-a52e-4f735466cecf'];
-        }
-        const evaluate = async <T>(expression: string): Promise<T> => request('POST', `${prefix}/execute/sync`,
-            { script: `return (${expression})`, args: [] });
-        return {
-            open: url => request('POST', `${prefix}/url`, { url }),
-            click: async selector => {
-                const id = await element(selector);
-                await request('POST', `${prefix}/element/${id}/click`, {});
-            },
-            fill: async (selector, text) => {
-                const id = await element(selector);
-                await request('POST', `${prefix}/element/${id}/clear`, {});
-                if (text) await request('POST', `${prefix}/element/${id}/value`, { text });
-            },
-            evaluate,
-            screenshot: async path => writeEvidenceFile(path, Buffer.from(await request('GET', `${prefix}/screenshot`), 'base64')),
-            resize: (width, height) => request('POST', `${prefix}/window/rect`, { width, height }),
-            close,
-            standalone: async () => {
-                const current = await request('GET', `${prefix}/window`);
-                const attempt: Record<string, unknown> = { command: 'POST /session/<owned>/window/new {"type":"standalone"}' };
-                try {
-                    const result = await request('POST', `${prefix}/window/new`, { type: 'standalone' });
-                    attempt.result = result;
-                    if (result.handle && result.handle !== current) {
-                        await request('POST', `${prefix}/window`, { handle: result.handle });
-                        attempt.actualStandalone = await evaluate("matchMedia('(display-mode: standalone)').matches || navigator.standalone === true");
-                        await request('DELETE', `${prefix}/window`);
-                        await request('POST', `${prefix}/window`, { handle: current });
-                    }
-                } catch (error) { attempt.error = String(error); }
-                attempt.reason = 'WebDriver exposes browser windows, not Safari Add to Dock. No user Safari window or system UI was touched.';
-                commands.push({ command: String(attempt.command), result: attempt });
-                return attempt;
-            }
-        };
-    }
-    if (mode === 'webkit') {
-        const cache = `${homedir()}/Library/Caches/ms-playwright`;
-        const versions = (await readdir(cache)).filter(name => name.startsWith('webkit-')).sort((a,b) => Number(b.split('-')[1]) - Number(a.split('-')[1]));
-        assert(versions.length, 'A cached WebKit build is required');
-        const executablePath = `${cache}/${versions[0]}/pw_run.sh`;
-        const browser = await webkit.launch({ executablePath, headless: true });
-        ownCleanup(() => browser.close());
-        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true,
-            deviceScaleFactor: 2, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1' });
-        let page = await context.newPage();
-        commands.push({ command: `Playwright WebKit executable ${executablePath}; viewport 390x844; mobile=true; touch=true` });
-        const forms = { phone: page } as Record<'phone' | 'desktop', typeof page>;
-        return {
-            open: url => page.goto(url), click: selector => page.locator(selector).click(),
-            fill: (selector, text) => page.locator(selector).fill(text), evaluate: expression => page.evaluate(expression),
-            screenshot: async path => writeEvidenceFile(path, await page.screenshot()),
-            resize: (width,height) => page.setViewportSize({ width, height }), close: () => browser.close(),
-            form: async kind => {
-                if (!forms[kind]) {
-                    const seat = await page.evaluate(() => localStorage.getItem('pancake-seat'));
-                    const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
-                    await desktop.addInitScript(token => { if (token) localStorage.setItem('pancake-seat', token); }, seat);
-                    forms[kind] = await desktop.newPage();
-                    await forms[kind].goto(page.url());
-                    commands.push({ command: 'Playwright WebKit desktop context; mobile=false; touch=false; same isolated seat' });
-                }
-                page = forms[kind];
-            }
-        };
-    }
-    const session = `sealed-${crypto.randomUUID()}`;
-    await execute('agent-browser', ['session', 'list']);
-    const command = async (...args: string[]) => runBrowser(session, args, 30000);
-    commands.push({ command: 'agent-browser --session <owned> open <isolated-local-app>' });
-    return {
-        open: async url => { await command('open', url); await command('snapshot', '-i'); },
-        click: async selector => {
-            commands.push({ command: `scrollintoview ${selector}` });
-            await command('scrollintoview', selector);
-            return command('click', selector);
-        }, fill: (selector, text) => command('fill', selector, text),
-        evaluate: async expression => JSON.parse(await command('eval', expression)),
-        screenshot: path => command('screenshot', path), resize: (width,height) => command('set', 'viewport', String(width), String(height)),
-        close: async () => {
-            await command('close');
-            for (let i = 0; i < 50; i++) {
-                if (!(await execute('agent-browser', ['session', 'list'])).stdout.includes(session)) return;
-                await sleep(100);
-            }
-            throw new Error('Owned Chromium session did not close');
-        }
-    };
-}
 async function main() {
     const root = `${process.env.EVIDENCE_DIR}/${mode}`;
     await makeEvidenceDirectory(root, { recursive: true });
@@ -263,6 +126,12 @@ async function main() {
             assert.equal(await browser!.evaluate('document.body.innerText.includes("Force end")'), false);
         });
         const ranked = [...source.players].sort((a,b) => (b.projection ?? -Infinity) - (a.projection ?? -Infinity));
+        await check('Blind wake events send no clock-sync requests', async () => {
+            await watchClockRequests(browser!);
+            await sleep(500);
+            assert.equal(await browser!.evaluate('window.auctionClockRequests'), 0);
+            assert.equal(await browser!.evaluate('Boolean(document.querySelector(".shot-clock, .clock-status"))'), false);
+        });
         await check('Nominate with a sealed amount; own response visible; commissioner cannot see another bid', async () => {
             await turnForMichael();
             await browser!.fill('[aria-label="Optional nomination bid"]', '51');
@@ -376,9 +245,6 @@ async function main() {
                 Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '');
                 return input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
             await until('document.querySelectorAll(".pool-row").length > 20');
-            const sizes: ['phone' | 'desktop', number, number][] = [['phone', 390, 844], ['phone', 375, 667], ['phone', 360, 640],
-                ['phone', 320, 568], ['phone', 390, 500], ['phone', 844, 390], ['desktop', 1440, 900], ['desktop', 1280, 720],
-                ['desktop', 1220, 760], ['desktop', 1024, 700], ['desktop', 900, 600]];
             // Phones drop the wordmark so the top bar stays one row (the installed app already carries the name).
             const common = (width: number) => [...(width > 860 ? ['.wordmark'] : []), '.me', '.me-budget', '.commish button:last-child', '.deadline'];
             const states: { name: string; ready: string; required: string[]; setup: () => Promise<void> }[] = [
@@ -401,75 +267,7 @@ async function main() {
                     required: ['[aria-label="Optional nomination bid"]', '.pool-row .nominate'],
                     setup: async () => { await finish(); await turnForMichael(); } }
             ];
-            const geometry = (required: string[]) => `(() => {
-                const vw = innerWidth, vh = innerHeight, de = document.documentElement;
-                const visible = e => e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
-                const reach = e => { const r = e.getBoundingClientRect();
-                    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + Math.min(r.height / 2, 10));
-                    return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height),
-                        inView: r.width > 0 && r.height > 0 && r.x >= -1 && r.y >= -1 && r.right <= vw + 1 && r.bottom <= vh + 1,
-                        hit: !!hit && (e === hit || e.contains(hit) || hit.contains(e)) }; };
-                const box = e => { if (!e) return null; const r = e.getBoundingClientRect();
-                    return { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right) }; };
-                const required = ${JSON.stringify(required)}.map(selector => { const e = document.querySelector(selector);
-                    return e && visible(e) ? { selector, ...reach(e) } : { selector, missing: true }; });
-                const targets = [...document.querySelectorAll('.room button:not(.name-button), .room input, .room select, .room summary, .pool-row')]
-                    .filter(visible).map(e => ({ text: (e.getAttribute('aria-label') || e.textContent).trim().slice(0, 40),
-                        h: Math.round(e.getBoundingClientRect().height) })).filter(t => t.h > 0);
-                const panel = [...document.querySelectorAll('.pool, .queue, .teams, .roster, .results')].filter(visible)
-                    .map(e => ({ panel: e.className.replace('panel ', ''), height: Math.round(e.getBoundingClientRect().height),
-                        scroll: e.querySelector('.scroll') ? Math.round(e.querySelector('.scroll').clientHeight) : null }));
-                // Player table: text (or action button) extents of every cell on screen; cells sharing a line must not crowd.
-                const pool = document.querySelector('.pool');
-                const extent = cell => { const control = cell.querySelector('.queue-quick, .nominate');
-                    if (control) return control.getBoundingClientRect();
-                    const range = document.createRange(); range.selectNodeContents(cell);
-                    const rects = [...range.getClientRects()].filter(r => r.width > 0 && r.height > 0);
-                    return rects.length ? { left: Math.min(...rects.map(r => r.left)), right: Math.max(...rects.map(r => r.right)),
-                        top: Math.min(...rects.map(r => r.top)), bottom: Math.max(...rects.map(r => r.bottom)) } : null; };
-                const line = row => { const cells = [...row.children].filter(c => visible(c) && !c.classList.contains('sr-only'))
-                    .map(c => ({ text: c.textContent.trim().slice(0, 24), ink: extent(c) })).filter(c => c.ink);
-                    let gap = Infinity, pair = null;
-                    for (let i = 0; i < cells.length; i++) for (let j = i + 1; j < cells.length; j++) {
-                        const a = cells[i].ink, b = cells[j].ink;
-                        if (Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) <= 0) continue;
-                        const d = Math.max(b.left - a.right, a.left - b.right);
-                        if (d < gap) { gap = d; pair = [cells[i].text, cells[j].text]; }
-                    }
-                    return { gap: Math.round(gap * 10) / 10, pair, labels: cells.map(c => c.text) }; };
-                let table = null;
-                if (pool && visible(pool)) {
-                    const scroll = pool.querySelector('.scroll'), s = scroll.getBoundingClientRect();
-                    const rows = [...pool.querySelectorAll('.pool-row')].filter(r => { const b = r.getBoundingClientRect();
-                        return visible(r) && b.top >= s.top - 1 && b.bottom <= s.bottom + 1; }).map(line);
-                    // Space between the bottom of the header labels (POS, AGE, ...) and the first player row.
-                    const head = pool.querySelector('.table-head'), first = pool.querySelector('.pool-row');
-                    const labels = [...head.children].filter(c => visible(c) && !c.classList.contains('sr-only')).map(extent).filter(Boolean);
-                    const posGap = first && labels.length ? Math.round(first.getBoundingClientRect().top - Math.max(...labels.map(r => r.bottom))) : null;
-                    table = { head: line(head), posGap, rows: rows.length,
-                        rowGap: Math.min(...rows.map(r => r.gap)), crowded: rows.filter(r => r.gap < 8),
-                        overflowX: scroll.scrollWidth - scroll.clientWidth };
-                }
-                return { viewport: [vw, vh], document: [de.scrollWidth, de.scrollHeight], body: [document.body.scrollWidth, document.body.scrollHeight],
-                    bodyOverflow: getComputedStyle(document.body).overflow, tab: document.querySelector('.room').dataset.tab,
-                    tabsShown: getComputedStyle(document.querySelector('.tabbar')).display !== 'none', required, targets, panel, table,
-                    thumb: { tabbar: box(document.querySelector('.tabbar')), block: box(document.querySelector('.block')),
-                        panel: box([...document.querySelectorAll('.pool, .queue, .roster, .results, .teams')].find(visible)),
-                        controls: [...document.querySelectorAll('.block .sealed-form > *, .block .opening input')].filter(visible)
-                            .map(e => ({ text: (e.getAttribute('aria-label') || e.textContent).trim(), ...box(e) })) } };
-            })()`;
             const proofs: unknown[] = [];
-            function assertOnePage(proof: { viewport: number[]; document: number[]; body: number[]; bodyOverflow: string;
-                required: { selector: string; missing?: boolean; inView?: boolean; hit?: boolean }[];
-                panel: { panel: string; scroll: number | null }[]; targets: { text: string; h: number }[] }, label: string, touch: boolean) {
-                const [width, height] = proof.viewport;
-                assert(proof.document[0] <= width && proof.document[1] <= height && proof.body[0] <= width && proof.body[1] <= height,
-                    `${label}: page overflows ${proof.document} in ${proof.viewport}`);
-                assert.equal(proof.bodyOverflow, 'hidden', `${label}: body must not scroll`);
-                for (const item of proof.required) assert(!item.missing && item.inView && item.hit, `${label}: ${item.selector} not reachable ${JSON.stringify(item)}`);
-                for (const panel of proof.panel) assert(panel.scroll === null || panel.scroll >= 56, `${label}: ${panel.panel} scroll area ${panel.scroll}px`);
-                if (touch) for (const target of proof.targets) assert(target.h >= 44, `${label}: touch target ${target.text} is ${target.h}px`);
-            }
             type Box = { top: number; bottom: number; left: number; right: number };
             // Touch layouts keep the tabs on the bottom edge; phones in portrait stack panel, decision card, then tabs,
             // with the amount field and its buttons on one row in the lower half where thumbs reach. When the

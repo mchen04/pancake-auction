@@ -3,20 +3,23 @@ import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { BlockPanel, PlayerDetails, PoolPanel, RosterPanel, turnsUntil } from '../app/components';
 import { canNominate, rankedDynastyAdp } from '../lib/rules';
-import { roomFixture } from './room-fixture';
+import { Strategy } from '../scripts/strategy';
+import { roomFixture as fixture } from './room-fixture';
 
-describe('review component regressions', () => {
-    it('renders stored unsold-cycle completion with an earlier-rules label', () => {
+describe.each(['live-v1', 'sealed-v1'] as const)('review component regressions: %s', mode => {
+    const roomFixture = () => fixture(mode);
+    it('renders the mode’s completion wording', () => {
         const state = roomFixture();
         state.lot = null;
         state.draft.status = 'complete';
-        state.draft.completionReason = 'full-cycle-unsold';
+        state.draft.completionReason = mode === 'live-v1' ? 'full-cycle-passed' : 'full-cycle-unsold';
         const html = renderToString(createElement(BlockPanel, {
             state, me: state.managers[0], busy: false, connected: true, send: async () => {},
             opening: undefined, setOpening: () => {}
         }));
         expect(html).toContain('Draft complete');
-        expect(html).toContain('Completed under earlier auction rules.');
+        expect(html).toContain(mode === 'live-v1' ? 'Every manager who could still nominate passed a full round.'
+            : 'Completed under earlier auction rules.');
         expect(html).not.toContain('No manager can nominate another player.');
     });
     it.each([[0, null], [1.3, 1.3], [699, 699], [999, null], [null, null], [-1, null], [1000, null]])(
@@ -93,6 +96,10 @@ describe('review component regressions', () => {
         const details = renderToString(createElement(PlayerDetails, { player }));
         expect(details).not.toContain('999.0');
         expect(details).toContain('Unranked by Sleeper');
+        if (mode === 'live-v1') {
+            const strategy = new Strategy(42, 3, state.players);
+            expect(strategy.valuation(state, player)).toBe(strategy.valuation(state, { ...player, adp: null }));
+        }
     });
     it('S4/C8 available Out and explicit Done negative controls match the turn hint', () => {
         const state = roomFixture();

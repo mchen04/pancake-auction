@@ -1,3 +1,4 @@
+import type { LoggedEvent } from '../scripts/audit';
 import { localBackend, sleep } from '../scripts/local-backend';
 import { AuctionClient, RuleError } from '../lib/client';
 import type { Action, Player } from '../lib/types';
@@ -67,6 +68,11 @@ export async function act(action: TestAction, token?: string) {
         const snapshot = await getState();
         return currentClient().act({ ...action, nominationGeneration: snapshot.draft.nominationGeneration }, token);
     }
+    if (action.type === 'force' && !('expectedHighBidderId' in action)) {
+        const snapshot = await getState();
+        return currentClient().act({ ...action, expectedHighBidderId: snapshot.lot?.highBidderId ?? -1,
+            expectedHighBid: snapshot.lot?.highBid ?? -1 }, token);
+    }
     return currentClient().act(action as Action, token);
 }
 export const claimSeat = (id: number) => currentClient().claim(id);
@@ -85,4 +91,10 @@ export async function seedPlayers(players = syntheticPool(), metadata?: SeedMeta
         fetchedAt: metadata?.fetchedAt ?? new Date().toISOString(), startedAt: Date.now(),
         sources: metadata?.sources ?? ['recorded-test-fixture'],
         counts: metadata?.counts ?? { pool: players.length }, coverage: metadata?.coverage ?? {} });
+}
+export async function events(): Promise<LoggedEvent[]> {
+    const data = await inspect();
+    return data.events.map((row: { id: number; type: string; managerId: number | null; lotId: number | null;
+        data: Record<string, unknown>; at: number }) => ({ id: String(row.id), type: row.type,
+        manager_id: row.managerId, lot_id: row.lotId, data: row.data, created_at: new Date(row.at) }));
 }

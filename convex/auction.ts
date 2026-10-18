@@ -1,3 +1,4 @@
+import { isAuctionMode } from '../lib/modes';
 import { v } from 'convex/values';
 import { internalMutation, mutation, query } from './_generated/server';
 import { act, advance, claim, draftRecord, load, restore, Store, privateState, changeQueue, cleanLot } from './engine';
@@ -5,6 +6,7 @@ import type { MutationCtx } from './_generated/server';
 import type { Id } from './_generated/dataModel';
 import { action, queueAction } from './validators';
 
+export const syncTime = mutation({ args: {}, handler: () => ({ serverNow: Date.now() }) });
 export const privateSeat = query({ args: { token: v.string() }, handler: (ctx, args) => privateState(ctx, args.token) });
 export const editQueue = mutation({ args: { token: v.string(), action: queueAction },
     handler: (ctx, args) => changeQueue(ctx, args.token, args.action) });
@@ -29,7 +31,7 @@ export async function expireDraft(ctx: MutationCtx, args: {
 }, now: number) {
     const record = await draftRecord(ctx);
     if (!record || record._id !== args.draftId || record.version !== args.version
-        || record.value.mode !== 'sealed-v1' || record.value.status !== 'running' || record.value.lotId !== args.lotId
+        || !isAuctionMode(record.value.mode) || record.value.status !== 'running' || record.value.lotId !== args.lotId
         || record.value.deadline !== args.deadline || now < args.deadline) return;
     const store = new Store(ctx, record);
     const state = await load(ctx, undefined, true, false);

@@ -1,9 +1,9 @@
 import { defineSchema, defineTable } from 'convex/server';
 import { v } from 'convex/values';
-import { player, placement, response, queueEntry } from './validators';
+import { player, placement, response, queueEntry, auctionMode } from './validators';
 
 export default defineSchema({
-    drafts: defineTable({ key: v.string(), value: v.object({ mode: v.optional(v.literal('sealed-v1')), tiePriority: v.optional(v.array(v.number())), status: v.union(v.literal('setup'),
+    drafts: defineTable({ key: v.string(), value: v.object({ mode: v.optional(auctionMode), tiePriority: v.optional(v.array(v.number())), status: v.union(v.literal('setup'),
         v.literal('running'), v.literal('paused'),
         v.literal('complete')), nominationGeneration: v.optional(v.string()), turnSequence: v.optional(v.number()),
         controlGeneration: v.optional(v.string()),
@@ -30,6 +30,6 @@ export default defineSchema({
         automatic: v.optional(v.string()) }).index('lotId', ['lotId']).index('owner', ['lotId', 'managerId']),
     queues: defineTable({ managerId: v.number(), entries: v.array(queueEntry) }).index('managerId', ['managerId']),
     passes: defineTable({ lotId: v.number(), managerId: v.number() }).index('lotId', ['lotId']),
-    events: defineTable({ sealed: v.optional(v.boolean()), id: v.number(), type: v.string(), managerId: v.union(v.number(), v.null()),
+    events: defineTable({ live: v.optional(v.boolean()), sealed: v.optional(v.boolean()), id: v.number(), type: v.string(), managerId: v.union(v.number(), v.null()),
         lotId: v.union(v.number(), v.null()), data: v.any(), at: v.number() }).index('id', ['id'])
 });

@@ -1,3 +1,4 @@
+export type AuctionMode = 'sealed-v1' | 'live-v1';
 export type Position = "PG" | "SG" | "SF" | "PF" | "C" | "G" | "F";
 export type Placement = "active" | "taxi" | "ir";
 export interface Player {
@@ -32,7 +33,7 @@ export interface Manager {
     claimed: boolean;
 }
 export interface Draft {
-    mode?: "sealed-v1";
+    mode?: AuctionMode;
     tiePriority?: number[];
     status: "setup" | "running" | "paused" | "complete";
     nominationGeneration: string;
@@ -88,6 +89,14 @@ export interface AuctionState {
     me: number | null;
 }
 export type Action = {
+    type: "mode";
+    mode: AuctionMode;
+} | {
+    type: "force";
+    lotId: number;
+    expectedHighBidderId?: number;
+    expectedHighBid?: number;
+} | {
     type: "start";
 } | {
     type: "pause";
@@ -104,15 +113,18 @@ export type Action = {
     nominationGeneration: string;
 } | {
     type: "nominate";
+    mode?: AuctionMode;
     nominationGeneration: string;
     playerId: string;
     amount?: number;
 } | {
     type: "bid";
+    mode?: AuctionMode;
     lotId: number;
     amount: number;
 } | {
     type: "pass";
+    mode?: AuctionMode;
     lotId: number;
 } | {
     type: "place";

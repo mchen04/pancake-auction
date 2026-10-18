@@ -1,3 +1,4 @@
+import { hasDefaultTiming } from '../lib/modes';
 import { evidenceDirectory } from './evidence';
 import managers from '../league/managers.json';
 import { runAdmin } from './admin-client';
@@ -17,7 +18,7 @@ export async function checkLeague(inspect = () => runAdmin('admin:inspect')) {
             run.finishedAt && run.counts.pool > 0 && run.counts.pool === data.pool?.count
                 && run.revision === data.pool?.revision),
         setup: draft?.status === 'setup' && data.lots.length === 0,
-        timing: draft?.mode === 'sealed-v1' && draft?.nominationMs === 86400000 && draft?.biddingMs === 86400000
+        timing: hasDefaultTiming(draft)
     };
     return { ready: Object.values(checks).every(Boolean), checks, imports: data.imports };
 }

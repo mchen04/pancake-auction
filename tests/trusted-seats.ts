@@ -45,7 +45,7 @@ async function main() {
         try { if ((await fetch(base)).ok) break; } catch {}
         await sleep(250);
     }
-    const cache = `${homedir()}/Library/Caches/ms-playwright`;
+    const cache = process.env.PLAYWRIGHT_BROWSERS_PATH || `${homedir()}/Library/Caches/ms-playwright`;
     const versions = (await readdir(cache)).filter(name => name.startsWith('webkit-'))
         .sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]));
     assert(versions.length, 'A cached WebKit build is required');

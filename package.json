@@ -12,17 +12,20 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run tests/*.test.ts tests/*.test.tsx",
-    "test:db": "tsx tests/sealed-db.ts && tsx tests/teardown.ts && tsx tests/pool-process.ts && tsx tests/import-metadata.ts",
+    "test:db": "tsx tests/modes-db.ts && tsx tests/live-db.ts && tsx tests/done-db.ts && tsx tests/review-db.ts && tsx tests/turn-intent.ts && tsx tests/sealed-db.ts && tsx tests/teardown.ts && tsx tests/pool-process.ts && tsx tests/import-metadata.ts",
     "verify": "tsx scripts/verify.ts",
     "league:check": "tsx scripts/cli.ts check",
-    "test:ui": "tsx tests/sealed-ui.ts",
+    "test:ui": "tsx tests/sealed-ui.ts && tsx tests/live-ui.ts",
     "test:seats": "tsx tests/trusted-seats.ts",
     "test:volume": "tsx tests/pool-volume.ts",
     "backend:local": "tsx scripts/local-dev.ts",
     "test:local": "tsx tests/ownership-gap.ts && tsx tests/backend-deadline.ts && tsx tests/process-groups.ts && node tests/bootstrap-cache.mjs && node tests/bootstrap-concurrency.mjs && node tests/bootstrap-config.mjs && tsx tests/preparation-lock.ts && tsx tests/backend-network.ts && tsx tests/local-dev.ts && tsx tests/local-state.ts && tsx tests/setup-cleanup.ts",
     "test:layout": "tsx tests/layout.ts && tsx tests/roster-slots.ts && tsx tests/connection.ts",
     "test:room": "tsx tests/ui-import.ts",
-    "test:update": "tsx tests/pwa-update.ts"
+    "test:update": "tsx tests/pwa-update.ts",
+    "test:live": "tsx tests/live-db.ts && tsx tests/done-db.ts && tsx tests/review-db.ts && tsx tests/turn-intent.ts",
+    "sim": "tsx scripts/sim.ts",
+    "test:live-client": "tsx tests/ui.ts && tsx tests/opening-bid.ts && tsx tests/turn-client.ts && tsx tests/clock-network.ts && tsx tests/clock-jump.ts && tsx tests/nomination-replay.ts"
   },
   "dependencies": {
     "convex": "^1.46.0",
