@@ -1,5 +1,4 @@
-import { makeEvidenceDirectory as mkdir, writeEvidenceFile as writeFile } from './evidence';
-import { evidenceDirectory, repositoryDirectory } from "./evidence";
+import { evidenceDirectory, makeEvidenceDirectory as mkdir, repositoryDirectory, writeEvidenceFile as writeFile } from './evidence';
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 

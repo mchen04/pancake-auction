@@ -269,15 +269,14 @@ export async function act(client: Store, s: AuctionState, now: number, action: E
             return;
         }
         if (action.type === "undo") {
-            const sale = await client.ctx.db.query('lots').withIndex('status', q => q.eq('status', 'sold'))
+            const undone = await client.ctx.db.query('lots').withIndex('status', q => q.eq('status', 'sold'))
                 .order('desc').first();
-            if (!sale) {
+            if (!undone) {
                 throw new RuleError("There is no sale to undo", 409);
             }
-            if (action.lotId !== Number(sale.id)) {
+            if (action.lotId !== Number(undone.id)) {
                 throw new RuleError("The latest sale has changed. Review it before undoing.", 409);
             }
-            const undone = sale;
             if (s.lot) {
                 await client.updateLot(s.lot.id, { status: "void" });
             }

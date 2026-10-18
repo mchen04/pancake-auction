@@ -224,7 +224,8 @@ The commissioner must arrange an explicit migration for an in-progress legacy dr
 An untouched legacy setup opens the setup room. Selecting a mode converts it to that mode’s defaults.
 Start without a selection converts legacy setup to Blind.
 Both actions refuse a legacy setup containing any lot or roster entry.
-Queue controls stay disabled until Start converts the setup. Legacy roster placement controls remain hidden.
+Choosing Blind or starting a legacy setup enables its queue controls.
+Legacy roster placement controls remain hidden.
 
 `league:managers` upgrades an empty legacy setup record to Blind defaults and preserves an already chosen mode.
 It refuses when any lot or roster entry exists or the draft has left setup.

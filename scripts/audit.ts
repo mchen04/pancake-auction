@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import type { Entry, Placement, Player } from "../lib/types";
-import type { AuctionState, Lot } from "../lib/types";
+import type { AuctionState, Entry, Lot, Placement, Player } from "../lib/types";
 export type LoggedEvent = {
     id: string;
     type: string;
